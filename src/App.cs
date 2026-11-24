@@ -1,9 +1,10 @@
-﻿// LNK Screen Manager - icone pres de l'heure (controleur), fenetre, options, demarrage.
+﻿// LNK Screen Manager - controleur (icone pres de l'heure, etat, actions), options, demarrage.
 // By LNK Co (c) 2026
 //
 // Sobriete des ressources :
 //  - au repos l'appli n'est qu'une icone pres de l'heure : aucun minuteur, aucune tache de fond qui tourne ;
 //  - la fenetre n'existe que quand elle est ouverte ; fermee, elle est detruite et la memoire rendue a Windows ;
+//  - les animations utilisent un seul minuteur qui ne tourne que pendant un mouvement ;
 //  - les menus sont construits a l'ouverture puis liberes.
 using System;
 using System.Collections.Generic;
@@ -22,8 +23,8 @@ using Microsoft.Win32;
 [assembly: AssemblyCompany("LNK Co")]
 [assembly: AssemblyProduct("LNK Screen Manager")]
 [assembly: AssemblyCopyright("© 2026 LNK Co")]
-[assembly: AssemblyVersion("1.2.0.0")]
-[assembly: AssemblyFileVersion("1.2.0.0")]
+[assembly: AssemblyVersion("1.3.0.0")]
+[assembly: AssemblyFileVersion("1.3.0.0")]
 
 namespace LnkScreenManager
 {
@@ -49,9 +50,11 @@ namespace LnkScreenManager
             catch { }
         }
 
+        static void Save() { try { File.WriteAllLines(FilePath, d.Select(kv => kv.Key + "=" + kv.Value)); } catch { } }
         static bool Get(string k, bool def) { Load(); string v; return d.TryGetValue(k, out v) ? v == "1" : def; }
         static void Set(string k, bool v) { Load(); d[k] = v ? "1" : "0"; Save(); }
-        static void Save() { try { File.WriteAllLines(FilePath, d.Select(kv => kv.Key + "=" + kv.Value)); } catch { } }
+        static string GetS(string k, string def) { Load(); string v; return d.TryGetValue(k, out v) ? v : def; }
+        static void SetS(string k, string v) { Load(); d[k] = v ?? ""; Save(); }
 
         public static bool TrayOnClose { get { return Get("TrayOnClose", true); } set { Set("TrayOnClose", value); } }
         public static bool TrayHintShown { get { return Get("TrayHintShown", false); } set { Set("TrayHintShown", value); } }
@@ -60,7 +63,9 @@ namespace LnkScreenManager
         public static bool AutoHdrGames { get { return Get("AutoHdrGames", true); } set { Set("AutoHdrGames", value); } }
         public static bool WikiLookup { get { return Get("WikiLookup", true); } set { Set("WikiLookup", value); } }
         /// Ecran a passer en HDR pour les jeux ("" = ecran ou s'affiche le jeu).
-        public static string HdrTarget { get { Load(); string v; return d.TryGetValue("HdrTarget", out v) ? v : ""; } set { Load(); d["HdrTarget"] = value ?? ""; Save(); } }
+        public static string HdrTarget { get { return GetS("HdrTarget", ""); } set { SetS("HdrTarget", value); } }
+        /// Theme : "system", "dark" ou "light".
+        public static string ThemeMode { get { return GetS("Theme", "system"); } set { SetS("Theme", value); } }
     }
 
     static class Startup
@@ -103,16 +108,16 @@ namespace LnkScreenManager
         readonly ContextMenuStrip menu = Menus.Create();
         readonly Control sync = new Control();
         readonly System.Windows.Forms.Timer debounce = new System.Windows.Forms.Timer { Interval = 600 };
-        MainForm form;
-        GamesForm gamesForm;
         readonly GameWatcher watcher;
+        MainForm form;
         DateTime lastRefresh = DateTime.MinValue;
+        bool lookingUp;
 
         public List<Monitor> Mons = new List<Monitor>();
         public List<Profile> ProfileList = new List<Profile>();
         public bool Busy, StatusError, Exiting;
         public string Status = "";
-        public event Action Changed;
+        public event Action Changed, GamesUpdated;
 
         public TrayApp(bool hidden)
         {
@@ -122,24 +127,31 @@ namespace LnkScreenManager
             tray.ContextMenuStrip = menu;
             menu.Opening += (s, e) => { Refresh(); BuildTrayMenu(); e.Cancel = false; };
             menu.Closed += (s, e) => { if (form == null) Post(() => { Menus.Clear(menu); Win.Trim(); }); };
-            tray.MouseClick += (s, e) => { if (e.Button == MouseButtons.Left) ShowMain(); };
-            tray.BalloonTipClicked += (s, e) => ShowMain();
+            tray.MouseClick += (s, e) => { if (e.Button == MouseButtons.Left) ShowMain(Page.Screens); };
+            tray.BalloonTipClicked += (s, e) => ShowMain(Page.Screens);
             tray.Visible = true;
             debounce.Tick += (s, e) => { debounce.Stop(); Refresh(); };
             SystemEvents.DisplaySettingsChanged += OnDisplayChanged;
+            SystemEvents.UserPreferenceChanged += OnUserPreference;
 
             watcher = new GameWatcher(this);
             ApplyGameSettings();
-            if (Settings.AutoHdrGames && Settings.WikiLookup)
-                new Thread(() => { Games.LookupMissing(); Post(() => { if (form == null && gamesForm == null) Win.Trim(); }); }) { IsBackground = true, Priority = ThreadPriority.BelowNormal }.Start();
+            if (Settings.AutoHdrGames && Settings.WikiLookup) LookupGames();
 
-            if (hidden) Post(Win.Trim); else ShowMain(); // Post : apres l'initialisation de la boucle de messages
+            if (hidden) Post(Win.Trim); else ShowMain(Page.Screens); // Post : apres l'initialisation de la boucle de messages
         }
 
         public void Post(Action a) { try { if (sync.IsHandleCreated) sync.BeginInvoke(a); } catch { } }
 
         // fenetre fermee = rien a mettre a jour : on ne fait rien du tout
         void OnDisplayChanged(object s, EventArgs e) { if (form != null) Post(() => { debounce.Stop(); debounce.Start(); }); }
+
+        // theme "Systeme" : suit le passage clair / sombre de Windows
+        void OnUserPreference(object s, UserPreferenceChangedEventArgs e)
+        {
+            if (e.Category == UserPreferenceCategory.General && Settings.ThemeMode == "system")
+                Post(() => Theme.Apply(Theme.SystemDark));
+        }
 
         // ------------------------------------------------ etat
         public void Refresh()
@@ -160,7 +172,7 @@ namespace LnkScreenManager
             get
             {
                 int on = Mons.Count(m => m.Active), hdr = Mons.Count(m => m.Active && m.HdrOn);
-                return on + " / " + Mons.Count + " écrans allumés" + (hdr > 0 ? " · HDR " + hdr : "");
+                return on + " / " + Mons.Count + " écrans allumés" + (hdr > 0 ? " · HDR sur " + hdr : "");
             }
         }
 
@@ -172,9 +184,9 @@ namespace LnkScreenManager
         {
             Rectangle r; int hz;
             bool known = Layout.Bounds(m, out r, out hz);
-            string res = known ? r.Width + " × " + r.Height + (hz > 0 ? " · " + hz + " Hz" : "") : "";
-            string d = m.Active ? res + (m.Primary ? " · principal" : "") : "éteint" + (known ? " · " + res : "");
-            return m.HasCustomName ? m.Model + " · " + d : d;
+            string res = known ? r.Width + " × " + r.Height + (hz > 0 ? "  ·  " + hz + " Hz" : "") : "";
+            string d = m.Active ? res + (m.Primary ? "  ·  principal" : "") : "Éteint" + (known ? "  ·  " + res : "");
+            return m.HasCustomName ? m.Model + "  ·  " + d : d;
         }
 
         public bool Matches(Profile p)
@@ -230,8 +242,7 @@ namespace LnkScreenManager
                     if (err != null)
                     {
                         SetStatus(err, true);
-                        if (form != null) MessageBox.Show(form, err, Brand.Name, MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                        else tray.ShowBalloonTip(4000, Brand.Name, err, ToolTipIcon.Warning);
+                        if (form == null) tray.ShowBalloonTip(4000, Brand.Name, err, ToolTipIcon.Warning);
                     }
                     else
                     {
@@ -326,13 +337,12 @@ namespace LnkScreenManager
 
         public void DeleteProfile(Profile p)
         {
-            if (MessageBox.Show(Owner, "Supprimer le profil « " + p.Name + " » ?", Brand.Name, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            if (!Dialogs.Confirm(Owner, "Supprimer le profil", "Supprimer le profil « " + p.Name + " » ?", "Supprimer")) return;
             var all = Profiles.Load(); all.RemoveAll(x => x.Name == p.Name); Profiles.Save(all);
             Refresh(); SetStatus("Profil supprimé.", false);
         }
 
         public void MakeShortcut(string profile) { CreateShortcut("LNK - " + profile, "--profile \"" + profile + "\"", Brand.Name + " - profil " + profile); }
-
         public void MakePlayShortcut(Game g) { CreateShortcut("Jouer en HDR - " + g.Name, "--play \"" + g.Key + "\"", "Active le HDR puis lance " + g.Name); }
 
         void CreateShortcut(string title, string args, string desc)
@@ -370,8 +380,29 @@ namespace LnkScreenManager
             watcher.Reset();
         }
 
-        public void GamesChanged() { watcher.Reset(); }
+        public void GamesChanged() { watcher.Reset(); if (GamesUpdated != null) GamesUpdated(); }
         public int GameSessions { get { return watcher.ActiveCount; } }
+
+        /// Recherche en arriere-plan des infos HDR manquantes (PCGamingWiki).
+        public void LookupGames()
+        {
+            if (lookingUp || !Settings.WikiLookup) return;
+            lookingUp = true;
+            new Thread(() =>
+            {
+                int n = 0;
+                try { n = Games.LookupMissing(); } catch { }
+                Post(() =>
+                {
+                    lookingUp = false;
+                    if (n > 0) GamesChanged();
+                    if (form == null) Win.Trim();
+                });
+            }) { IsBackground = true, Priority = ThreadPriority.BelowNormal }.Start();
+        }
+        public bool LookingUp { get { return lookingUp; } }
+
+        public void RescanGames() { Games.Reload(); GamesChanged(); LookupGames(); }
 
         /// Bascule HDR declenchee par un jeu (independante des autres actions en cours).
         public void HdrAuto(Monitor m, bool on, string msg)
@@ -385,23 +416,9 @@ namespace LnkScreenManager
                     Refresh();
                     SetStatus(err ?? msg, err != null);
                     if (form == null && (err != null || Settings.NotifyChanges)) tray.ShowBalloonTip(2000, Brand.Name, err ?? msg, ToolTipIcon.None);
-                    if (form == null && gamesForm == null) Win.Trim();
+                    if (form == null) Win.Trim();
                 });
             }) { IsBackground = true }.Start();
-        }
-
-        public void ShowGames()
-        {
-            if (Exiting) return;
-            if (gamesForm == null)
-            {
-                Refresh();
-                gamesForm = new GamesForm(this);
-                gamesForm.FormClosed += (s, e) => { gamesForm = null; if (form == null && !Exiting) Post(Win.Trim); };
-                gamesForm.Show();
-            }
-            else if (gamesForm.WindowState == FormWindowState.Minimized) gamesForm.WindowState = FormWindowState.Normal;
-            gamesForm.Activate();
         }
 
         // ------------------------------------------------ menu pres de l'heure
@@ -448,33 +465,27 @@ namespace LnkScreenManager
             }
 
             menu.Items.Add(new ToolStripSeparator());
-            var ren = Menus.Sub("Renommer un écran");
-            foreach (var m0 in Mons)
-            {
-                var m = m0;
-                ren.DropDownItems.Add(Menus.Item(Number(m) + "   " + m.Name + (m.HasCustomName ? "   (" + m.Model + ")" : ""), (s, e) => RenameScreen(m)));
-            }
-            menu.Items.Add(ren);
-            var auto = Menus.Item("HDR auto pour les jeux", (s, e) => { Settings.AutoHdrGames = !Settings.AutoHdrGames; ApplyGameSettings(); });
+            var auto = Menus.Item("HDR auto pour les jeux", (s, e) => { Settings.AutoHdrGames = !Settings.AutoHdrGames; ApplyGameSettings(); if (Changed != null) Changed(); });
             auto.Checked = Settings.AutoHdrGames;
             menu.Items.Add(auto);
-            menu.Items.Add(Menus.Item("Jeux…", (s, e) => ShowGames()));
-            menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(Menus.Item("Tout allumer", (s, e) => AllOn()));
             menu.Items.Add(Menus.Item("Identifier les écrans", (s, e) => Identify(null)));
             menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add(Menus.Item("Ouvrir", (s, e) => ShowMain()));
+            menu.Items.Add(Menus.Item("Écrans", (s, e) => ShowMain(Page.Screens)));
+            menu.Items.Add(Menus.Item("Jeux", (s, e) => ShowMain(Page.Games)));
+            menu.Items.Add(Menus.Item("Réglages", (s, e) => ShowMain(Page.Settings)));
+            menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(Menus.Item("Quitter", (s, e) => Exit()));
         }
 
         // ------------------------------------------------ fenetre
-        public void ShowMain()
+        public void ShowMain(Page page)
         {
             if (Exiting) return;
             if (form == null)
             {
                 Refresh();
-                form = new MainForm(this);
+                form = new MainForm(this, page);
                 form.FormClosed += (s, e) =>
                 {
                     form = null; debounce.Stop();
@@ -484,6 +495,7 @@ namespace LnkScreenManager
             }
             else
             {
+                form.ShowPage(page);
                 if (form.WindowState == FormWindowState.Minimized) form.WindowState = FormWindowState.Normal;
             }
             form.Activate();
@@ -495,7 +507,7 @@ namespace LnkScreenManager
             if (!Settings.TrayOnClose) { Exit(); return; }
             if (!Settings.TrayHintShown)
             {
-                tray.ShowBalloonTip(5000, Brand.Name, "Toujours disponible près de l'heure (clic droit : profils, écrans, HDR). Désactivable dans Options.", ToolTipIcon.None);
+                tray.ShowBalloonTip(5000, Brand.Name, "Toujours disponible près de l'heure (clic droit : profils, écrans, HDR). Désactivable dans Réglages.", ToolTipIcon.None);
                 Settings.TrayHintShown = true;
             }
         }
@@ -505,9 +517,9 @@ namespace LnkScreenManager
             if (Exiting) return;
             Exiting = true;
             SystemEvents.DisplaySettingsChanged -= OnDisplayChanged;
+            SystemEvents.UserPreferenceChanged -= OnUserPreference;
             watcher.Stop();
             tray.Visible = false;
-            if (gamesForm != null) gamesForm.Close();
             if (form != null) form.Close();
             ExitThread();
         }
@@ -516,249 +528,6 @@ namespace LnkScreenManager
         {
             if (disposing) { tray.Dispose(); menu.Dispose(); debounce.Dispose(); sync.Dispose(); }
             base.Dispose(disposing);
-        }
-    }
-
-    // ------------------------------------------------------------------ Fenetre principale (simple vue de l'etat du controleur)
-    class MainForm : Form
-    {
-        readonly TrayApp app;
-        readonly Panel header = new Panel(), body = new Panel(), footer = new Panel();
-        readonly SectionHeader secMap = new SectionHeader("Disposition"), secScreens = new SectionHeader("Écrans") { Columns = true }, secProfiles = new SectionHeader("Profils");
-        readonly LayoutMap map = new LayoutMap();
-        readonly List<MonitorCard> cards = new List<MonitorCard>();
-        readonly List<Pill> pills = new List<Pill>();
-        readonly ContextMenuStrip optionsMenu = Menus.Create(), itemMenu = Menus.Create();
-        readonly ToolTip tips = new ToolTip();
-        string pillsSig;
-
-        public MainForm(TrayApp app)
-        {
-            this.app = app;
-            Text = Brand.Name; BackColor = Theme.Bg; ForeColor = Theme.Text; Font = Theme.F(9.5f, false);
-            AutoScaleMode = AutoScaleMode.None; StartPosition = FormStartPosition.CenterScreen;
-            Icon = LogoArt.AppIcon(Theme.D(32));
-            ClientSize = new Size(Theme.D(560), Theme.D(560));
-            MinimumSize = new Size(Theme.D(470), Theme.D(300));
-
-            header.Dock = DockStyle.Top; header.Height = Theme.D(52); header.BackColor = Theme.Bg;
-            header.Paint += PaintHeader;
-            var bOpt = new IconButton(Glyph.Settings);
-            var bId = new IconButton(Glyph.Identify);
-            var bGames = new IconButton(Glyph.Game);
-            tips.SetToolTip(bOpt, "Options"); tips.SetToolTip(bId, "Identifier les écrans"); tips.SetToolTip(bGames, "Jeux et HDR auto");
-            bGames.Click += (s, e) => app.ShowGames();
-            header.Controls.Add(bGames);
-            bOpt.Click += (s, e) => optionsMenu.Show(bOpt, new Point(bOpt.Width - optionsMenu.PreferredSize.Width, bOpt.Height + Theme.D(2)));
-            bId.Click += (s, e) => app.Identify(null);
-            header.Controls.Add(bOpt); header.Controls.Add(bId);
-            header.Resize += (s, e) =>
-            {
-                int y = (header.Height - bOpt.Height) / 2;
-                bOpt.Location = new Point(header.Width - Theme.D(14) - bOpt.Width, y);
-                bId.Location = new Point(bOpt.Left - Theme.D(2) - bId.Width, y);
-                bGames.Location = new Point(bId.Left - Theme.D(2) - bGames.Width, y);
-            };
-
-            body.Dock = DockStyle.Fill; body.AutoScroll = true; body.BackColor = Theme.Bg;
-            map.HoverChanged += (s, e) => { foreach (var c in cards) { bool h = c.Number == map.Hover; if (c.Highlight != h) { c.Highlight = h; c.Repaint(); } } };
-            map.ItemDoubleClicked += n => { var c = cards.FirstOrDefault(x => x.Number == n); if (c != null) app.ToggleScreen(c.M, !c.M.Active); };
-            tips.SetToolTip(map, "Double-clic : allumer / éteindre");
-            body.Controls.AddRange(new Control[] { secMap, map, secScreens, secProfiles });
-            body.Resize += (s, e) => Relayout();
-
-            footer.Dock = DockStyle.Bottom; footer.Height = Theme.D(28); footer.BackColor = Theme.Bg;
-            footer.Paint += PaintFooter;
-
-            Controls.Add(body); Controls.Add(footer); Controls.Add(header);
-
-            BuildOptionsMenu();
-            itemMenu.Closed += (s, e) => BeginInvoke((Action)(() => Menus.Clear(itemMenu)));
-
-            app.Changed += Render;
-            Activated += (s, e) => app.RefreshIfStale();
-            Render();
-            FitHeight();
-        }
-
-        protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); Win.Style(Handle, Theme.Bg); }
-
-        protected override void OnFormClosing(FormClosingEventArgs e)
-        {
-            if (e.CloseReason == CloseReason.UserClosing && !app.Exiting) app.OnUserClose();
-            base.OnFormClosing(e);
-        }
-
-        protected override void OnFormClosed(FormClosedEventArgs e)
-        {
-            app.Changed -= Render;
-            optionsMenu.Dispose(); itemMenu.Dispose(); tips.Dispose();
-            base.OnFormClosed(e);
-
-        }
-
-        // ------------------------------------------------ dessin
-        void PaintHeader(object s, PaintEventArgs e)
-        {
-            var g = e.Graphics;
-            int ls = Theme.D(22), y = (header.Height - ls) / 2;
-            g.DrawImage(LogoArt.Small(ls), Theme.D(18), y, ls, ls);
-            Theme.Draw(g, Brand.Name, Theme.F(11f, true), new Rectangle(Theme.D(18) + ls + Theme.D(10), 0, Theme.D(300), header.Height), Theme.Text, TextFormatFlags.VerticalCenter);
-        }
-
-        void PaintFooter(object s, PaintEventArgs e)
-        {
-            var g = e.Graphics; var f = Theme.F(8.5f, false);
-            int pad = Theme.D(18), w = footer.Width - 2 * pad;
-            string left = app.Busy ? app.Status : (string.IsNullOrEmpty(app.Status) ? app.Summary : app.Status);
-            Theme.Draw(g, left, f, new Rectangle(pad, 0, w - Theme.D(130), footer.Height), app.StatusError ? Theme.Danger : Theme.Faint, TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
-            Theme.Draw(g, Brand.By, f, new Rectangle(pad, 0, w, footer.Height), Theme.Faint, TextFormatFlags.VerticalCenter | TextFormatFlags.Right);
-        }
-
-        // ------------------------------------------------ synchronisation avec l'etat
-        void Render()
-        {
-            if (IsDisposed) return;
-            var mons = app.Mons;
-            UseWaitCursor = app.Busy;
-
-            // lignes d'ecrans : recreees seulement si les ecrans branches changent
-            if (string.Join("|", mons.Select(m => m.DevicePath)) != string.Join("|", cards.Select(c => c.M.DevicePath)))
-            {
-                foreach (var c in cards) { body.Controls.Remove(c); c.Dispose(); }
-                cards.Clear();
-                foreach (var m0 in mons)
-                {
-                    var card = new MonitorCard();
-                    card.TgOn.Toggled += (s, e) => app.ToggleScreen(card.M, card.TgOn.Checked);
-                    card.TgHdr.Toggled += (s, e) => app.SetHdr(card.M, card.TgHdr.Checked);
-                    card.HoverChanged += (s, e) => map.SetHover(card.IsHover ? card.Number : -1);
-                    card.RenameRequested += (s, e) => app.RenameScreen(card.M);
-                    card.MenuRequested += pt => ShowScreenMenu(card, pt);
-                    cards.Add(card); body.Controls.Add(card);
-                }
-            }
-
-            var items = new List<LayoutMap.Item>();
-            for (int i = 0; i < mons.Count; i++)
-            {
-                var m = mons[i];
-                cards[i].SetData(m, i + 1, TrayApp.Detail(m));
-                Rectangle r; int hz;
-                if (Settings.ShowMap && LnkScreenManager.Layout.Bounds(m, out r, out hz)) items.Add(new LayoutMap.Item { M = m, Number = i + 1, R = r });
-            }
-            if (Settings.ShowMap) map.SetItems(items);
-
-            // profils : reconstruits seulement si la liste ou le profil actif change
-            string sig = string.Join("|", app.ProfileList.Select(p => p.Name + (app.Matches(p) ? "*" : "")));
-            if (sig != pillsSig)
-            {
-                pillsSig = sig;
-                foreach (var p in pills) { body.Controls.Remove(p); p.Dispose(); }
-                pills.Clear();
-                foreach (var p0 in app.ProfileList)
-                {
-                    var p = p0;
-                    var pill = new Pill(p.Name) { Active = app.Matches(p) };
-                    pill.MouseUp += (s, e) =>
-                    {
-                        if (e.Button == MouseButtons.Left) app.ApplyProfile(p);
-                        else if (e.Button == MouseButtons.Right) ShowProfileMenu(pill, p, e.Location);
-                    };
-                    tips.SetToolTip(pill, "Clic : appliquer · clic droit : options");
-                    pills.Add(pill); body.Controls.Add(pill);
-                }
-                var add = new Pill("+  Nouveau") { Dashed = true };
-                add.Click += (s, e) => app.NewProfile();
-                tips.SetToolTip(add, "Enregistrer l'état actuel des écrans comme profil");
-                pills.Add(add); body.Controls.Add(add);
-            }
-
-            footer.Invalidate();
-            Relayout();
-        }
-
-        void Relayout()
-        {
-            int pad = Theme.D(18), w = body.ClientSize.Width - pad * 2, y = Theme.D(8), sy = body.AutoScrollPosition.Y;
-            body.SuspendLayout();
-            secMap.Visible = map.Visible = Settings.ShowMap;
-            if (Settings.ShowMap)
-            {
-                secMap.SetBounds(pad, y + sy, w, secMap.Height); y += secMap.Height + Theme.D(2);
-                map.SetBounds(pad, y + sy, w, map.Height); y += map.Height + Theme.D(16);
-            }
-            secScreens.SetBounds(pad, y + sy, w, secScreens.Height); y += secScreens.Height + Theme.D(2);
-            foreach (var c in cards) { c.SetBounds(pad, y + sy, w, c.Height); y += c.Height + Theme.D(6); }
-            y += Theme.D(10);
-            secProfiles.SetBounds(pad, y + sy, w, secProfiles.Height); y += secProfiles.Height + Theme.D(4);
-            int x = pad, gap = Theme.D(8);
-            foreach (var p in pills)
-            {
-                if (x > pad && x + p.Width > pad + w) { x = pad; y += p.Height + gap; }
-                p.Location = new Point(x, y + sy); x += p.Width + gap;
-            }
-            if (pills.Count > 0) y += pills[0].Height;
-            y += Theme.D(14);
-            body.AutoScrollMinSize = new Size(0, y);
-            body.ResumeLayout();
-        }
-
-        /// La fenetre prend la hauteur exacte de son contenu (plafonnee a l'ecran).
-        void FitHeight()
-        {
-            Relayout();
-            int h = header.Height + footer.Height + body.AutoScrollMinSize.Height;
-            ClientSize = new Size(ClientSize.Width, Math.Min(h, Screen.FromControl(this).WorkingArea.Height - Theme.D(80)));
-        }
-
-        // ------------------------------------------------ menus
-        void ShowScreenMenu(MonitorCard card, Point pt)
-        {
-            var m = card.M;
-            Menus.Clear(itemMenu);
-            itemMenu.Items.Add(Menus.Header(m.Model));
-            itemMenu.Items.Add(Menus.Item("Renommer…", (s, e) => app.RenameScreen(m)));
-            if (m.HasCustomName) itemMenu.Items.Add(Menus.Item("Reprendre le nom d'origine", (s, e) => app.ResetScreenName(m)));
-            itemMenu.Items.Add(new ToolStripSeparator());
-            itemMenu.Items.Add(Menus.Item(m.Active ? "Éteindre" : "Allumer", (s, e) => app.ToggleScreen(m, !m.Active)));
-            if (m.Active && m.HdrSupported) itemMenu.Items.Add(Menus.Item(m.HdrOn ? "Couper le HDR" : "Activer le HDR", (s, e) => app.SetHdr(m, !m.HdrOn)));
-            if (m.Active) itemMenu.Items.Add(Menus.Item("Identifier", (s, e) => app.Identify(m)));
-            itemMenu.Show(card, pt);
-        }
-
-        void ShowProfileMenu(Control anchor, Profile p, Point pt)
-        {
-            Menus.Clear(itemMenu);
-            itemMenu.Items.Add(Menus.Item("Appliquer", (s, e) => app.ApplyProfile(p)));
-            itemMenu.Items.Add(Menus.Item("Remplacer par l'état actuel", (s, e) => app.ReplaceProfile(p)));
-            itemMenu.Items.Add(Menus.Item("Raccourci sur le bureau", (s, e) => app.MakeShortcut(p.Name)));
-            itemMenu.Items.Add(Menus.Item("Renommer…", (s, e) => app.RenameProfile(p)));
-            itemMenu.Items.Add(new ToolStripSeparator());
-            var del = Menus.Item("Supprimer", (s, e) => app.DeleteProfile(p)); del.ForeColor = Theme.Danger;
-            itemMenu.Items.Add(del);
-            itemMenu.Show(anchor, pt);
-        }
-
-        void BuildOptionsMenu()
-        {
-            var tray1 = Menus.Item("Réduire près de l'heure à la fermeture", (s, e) => Settings.TrayOnClose = !Settings.TrayOnClose);
-            var mapItem = Menus.Item("Afficher la disposition", (s, e) => { Settings.ShowMap = !Settings.ShowMap; Render(); FitHeight(); });
-            var notif = Menus.Item("Notifications", (s, e) => Settings.NotifyChanges = !Settings.NotifyChanges);
-            var boot = Menus.Item("Lancer au démarrage de Windows", (s, e) =>
-            {
-                try { Startup.Enabled = !Startup.Enabled; app.SetStatus(Startup.Enabled ? "Lancement au démarrage activé." : "Lancement au démarrage désactivé.", false); }
-                catch (Exception ex) { app.SetStatus("Impossible : " + ex.Message, true); }
-            });
-            optionsMenu.Items.AddRange(new ToolStripItem[] { tray1, mapItem, notif, boot, new ToolStripSeparator() });
-            optionsMenu.Items.Add(Menus.Item("Tout allumer", (s, e) => app.AllOn()));
-            optionsMenu.Items.Add(Menus.Item("Couper le HDR partout", (s, e) => app.AllHdrOff()));
-            optionsMenu.Items.Add(Menus.Item("Jeux et HDR auto…", (s, e) => app.ShowGames()));
-            optionsMenu.Items.Add(Menus.Item("Ouvrir le dossier des données", (s, e) => { try { System.Diagnostics.Process.Start("explorer.exe", "\"" + AppData.Dir + "\""); } catch { } }));
-            optionsMenu.Items.Add(new ToolStripSeparator());
-            optionsMenu.Items.Add(Menus.Item("À propos", (s, e) => Dialogs.About(this)));
-            optionsMenu.Items.Add(Menus.Item("Quitter", (s, e) => app.Exit()));
-            optionsMenu.Opening += (s, e) => { tray1.Checked = Settings.TrayOnClose; mapItem.Checked = Settings.ShowMap; notif.Checked = Settings.NotifyChanges; boot.Checked = Startup.Enabled; };
         }
     }
 
@@ -808,6 +577,7 @@ namespace LnkScreenManager
 
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
+                Theme.ApplyMode(Settings.ThemeMode);
                 Startup.RefreshPath();
 
                 using (var app = new TrayApp(a0 == "--tray"))
@@ -822,7 +592,7 @@ namespace LnkScreenManager
                         {
                             int i;
                             try { i = WaitHandle.WaitAny(hs); } catch { return; }
-                            if (i == 0) app.Post(app.ShowMain); else app.Post(app.RefreshIfOpen);
+                            if (i == 0) app.Post(() => app.ShowMain(Page.Screens)); else app.Post(app.RefreshIfOpen);
                         }
                     }) { IsBackground = true }.Start();
 

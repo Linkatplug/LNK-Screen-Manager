@@ -3,8 +3,10 @@
 By LNK Co © 2026 — allumer / éteindre ses écrans et gérer le HDR en un clic, sans passer par les Paramètres Windows.
 
 ## Utilisation
-- **LNK Screen Manager.exe** : ouvre la fenêtre (interrupteurs *Écran* et *HDR* par écran, mini-carte, profils).
-- Fermer la fenêtre (X) la réduit près de l'heure. Clic droit sur l'icône : profils, écrans, HDR. Désactivable dans *Options*.
+- **LNK Screen Manager.exe** : une seule fenêtre avec menu latéral : **Écrans** (interrupteurs *Écran* / *HDR*, mini-carte, profils), **Jeux** (HDR auto), **Réglages**. Raccourcis Ctrl+1 / 2 / 3.
+- **Mode sombre / clair** : bouton en bas du menu latéral, ou Réglages → Thème (Système / Sombre / Clair).
+- Pas de défilement : la fenêtre se dimensionne pour que chaque page tienne entièrement.
+- Fermer la fenêtre (X) la réduit près de l'heure. Clic droit sur l'icône : profils, écrans, HDR. Désactivable dans *Réglages*.
 - Profils : *Nouveau profil* enregistre l'état actuel. Clic = appliquer, clic droit = raccourci bureau / renommer / supprimer.
 - Double-clic sur un écran de la mini-carte : l'allumer / l'éteindre.
 - Renommer un écran : clic sur son nom (crayon), clic droit sur sa carte, ou clic droit sur l'icône près de l'heure → *Renommer un écran*. Nom vide = nom d'origine.
@@ -16,7 +18,7 @@ La fenêtre n'existe que lorsqu'elle est ouverte : à la fermeture elle est dét
 Option *Afficher la disposition* pour masquer la mini-carte.
 
 ## HDR automatique pour les jeux
-- Bouton manette (ou menu près de l'heure → *Jeux…*) : liste des jeux détectés (Steam, Epic, jeux reconnus par Windows) + ajout manuel d'un exe.
+- Page **Jeux** (ou menu près de l'heure → *Jeux*) : liste des jeux détectés (Steam, Epic, jeux reconnus par Windows) + ajout manuel d'un exe.
 - Un jeu marqué *HDR auto* passe l'écran en HDR dès que sa fenêtre apparaît ; l'état d'avant est remis à sa fermeture (y compris si un lanceur démarre le vrai jeu).
 - Pré-réglage par PCGamingWiki (n'envoie que l'identifiant Steam public, une fois par jeu ; désactivable).
 - Écran ciblé : celui où s'affiche le jeu, ou un écran imposé.
