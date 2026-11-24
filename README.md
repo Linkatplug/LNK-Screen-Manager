@@ -1,11 +1,48 @@
 # LNK Screen Manager
 
-By LNK Co © 2026 — gratuit et open source (licence MIT) · *free and open source (MIT license)*
+By LNK Co © 2026 — free and open source (MIT license) · *gratuit et open source (licence MIT)*
 
-Allumer / éteindre ses écrans et gérer le HDR en un clic, sans passer par les Paramètres Windows — avec HDR automatique au lancement des jeux.
-*Turn screens on / off and toggle HDR in one click — with automatic HDR when a game starts.*
+Turn your screens on / off and toggle HDR in one click, without digging through Windows Settings — with automatic HDR when a game starts.
+*Allumer / éteindre ses écrans et gérer le HDR en un clic — avec HDR automatique au lancement des jeux.*
 
-**Langues / Languages :** Français · English · Deutsch · Español · Italiano · Português (automatique selon Windows, modifiable dans Réglages).
+**Languages / Langues:** English · Français · Deutsch · Español · Italiano · Português (follows Windows automatically, can be changed in Settings).
+
+[English](#english) · [Français](#français)
+
+---
+
+## English
+
+### Features
+- **Screens**: one *Screen* switch and one *HDR* switch per monitor, layout mini-map, custom names (“Main”, “Top left”…), identify.
+- **Profiles**: save your screen setup (e.g. “Gaming”) and apply it in one click, from a desktop shortcut or the command line.
+- **Auto HDR for games**: games are detected automatically (Steam, Epic, games known to Windows, manual add). A compatible game switches its screen to HDR when it starts; the previous state comes back when it closes. “Play in HDR” shortcut for games that only check HDR at startup.
+- **Tray icon** next to the clock: profiles, screens and HDR on right-click. The X button minimizes the app there (can be turned off).
+- Dark / light / system theme, 6 languages, sharp at any display scaling (100 % to 200 %, mixed-DPI setups), automatic compact layout on small screens.
+- **Lightweight**: ~2-4 MB of RAM and 0 % CPU when idle (no polling).
+
+### Install
+Nothing to install: copy `LNK Screen Manager.exe` anywhere and run it. Windows 10 or 11 (.NET Framework 4, built into Windows). No admin rights needed.
+
+**SmartScreen warning**: the exe is not code-signed (no paid certificate). On first launch Windows may show “Windows protected your PC”: click **More info**, then **Run anyway**. To check the file, compare its SHA-256 hash with the one published in the release (`Get-FileHash "LNK Screen Manager.exe"`), or build it yourself (see below).
+
+### Data & privacy
+- Profiles, screen names, layout and settings: `%APPDATA%\LNK Screen Manager` (nothing else is written, except the Windows startup entry if that option is on).
+- The only network access is the optional *Online HDR info* lookup: it sends each game's **public Steam ID** to PCGamingWiki, once per game. Can be turned off in Settings.
+- Anti-cheat safe: the app never touches games, it only changes the Windows display setting.
+
+### Command line
+```
+"LNK Screen Manager.exe" --profile "Gaming"   apply a profile without opening the window
+"LNK Screen Manager.exe" --play "steam:ID"    turn HDR on, then start the game
+"LNK Screen Manager.exe" --all-on             turn all screens back on
+"LNK Screen Manager.exe" --tray               start minimized next to the clock
+```
+If a display goes wrong: **Win + P → Extend** turns all screens back on.
+
+### Build
+Run `build.bat` (uses the C# compiler shipped with Windows, no dependencies). Sources in `src\`, icon and logo generated in `assets\`.
+Adding a language: `src\Lang.cs` (one column in the table).
 
 ---
 
@@ -44,32 +81,10 @@ Ajouter une langue : `src\Lang.cs` (une colonne dans la table).
 
 ---
 
-## English
+## Credits / Crédits
+- Game HDR information: [PCGamingWiki](https://www.pcgamingwiki.com), content licensed under [CC BY-NC-SA 3.0](https://creativecommons.org/licenses/by-nc-sa/3.0/). LNK Screen Manager is not affiliated with PCGamingWiki.
+  *Informations HDR des jeux : PCGamingWiki, CC BY-NC-SA 3.0. Non affilié à PCGamingWiki.*
+- Steam, Epic Games and Windows are trademarks of their respective owners.
 
-### Features
-- **Screens**: one *Screen* switch and one *HDR* switch per monitor, layout mini-map, custom names, identify.
-- **Profiles**: save your screen setup (e.g. “Gaming”) and apply it in one click, from a desktop shortcut or the command line.
-- **Auto HDR for games**: games are detected automatically (Steam, Epic, games known to Windows, manual add). A compatible game switches its screen to HDR when it starts; the previous state comes back when it closes. “Play in HDR” shortcut for games that only check HDR at startup.
-- **Tray icon** next to the clock with profiles, screens and HDR on right-click.
-- Dark / light / system theme, 6 languages, sharp at any display scaling (including mixed-DPI setups), automatic compact layout on small screens.
-- **Lightweight**: ~2-4 MB RAM and 0 % CPU when idle (no polling).
-
-### Install
-Nothing to install: copy `LNK Screen Manager.exe` anywhere and run it. Windows 10 or 11, no admin rights needed.
-The exe is not code-signed, so SmartScreen may warn on first launch: click **More info** → **Run anyway**, or build it yourself.
-
-### Privacy
-Data lives in `%APPDATA%\LNK Screen Manager`. The only network access is the optional *Online HDR info* lookup, which sends a game's public Steam ID to PCGamingWiki once per game.
-
-### Build
-Run `build.bat` (uses the C# compiler shipped with Windows, no dependencies).
-
----
-
-## Crédits / Credits
-- Informations HDR des jeux : [PCGamingWiki](https://www.pcgamingwiki.com) — contenu sous licence [CC BY-NC-SA 3.0](https://creativecommons.org/licenses/by-nc-sa/3.0/). LNK Screen Manager n'est pas affilié à PCGamingWiki.
-  *Game HDR information: PCGamingWiki, CC BY-NC-SA 3.0. Not affiliated with PCGamingWiki.*
-- Steam, Epic Games et Windows sont des marques de leurs propriétaires respectifs.
-
-## Licence
+## License / Licence
 [MIT](LICENSE) © 2026 LNK Co
