@@ -23,8 +23,8 @@ using Microsoft.Win32;
 [assembly: AssemblyCompany("LNK Co")]
 [assembly: AssemblyProduct("LNK Screen Manager")]
 [assembly: AssemblyCopyright("© 2026 LNK Co")]
-[assembly: AssemblyVersion("1.3.0.0")]
-[assembly: AssemblyFileVersion("1.3.0.0")]
+[assembly: AssemblyVersion("1.4.0.0")]
+[assembly: AssemblyFileVersion("1.4.0.0")]
 
 namespace LnkScreenManager
 {
@@ -66,6 +66,8 @@ namespace LnkScreenManager
         public static string HdrTarget { get { return GetS("HdrTarget", ""); } set { SetS("HdrTarget", value); } }
         /// Theme : "system", "dark" ou "light".
         public static string ThemeMode { get { return GetS("Theme", "system"); } set { SetS("Theme", value); } }
+        /// Langue : "auto" (langue de Windows) ou fr / en / de / es / it / pt.
+        public static string Language { get { return GetS("Language", "auto"); } set { SetS("Language", value); } }
     }
 
     static class Startup
@@ -172,7 +174,7 @@ namespace LnkScreenManager
             get
             {
                 int on = Mons.Count(m => m.Active), hdr = Mons.Count(m => m.Active && m.HdrOn);
-                return on + " / " + Mons.Count + " écrans allumés" + (hdr > 0 ? " · HDR sur " + hdr : "");
+                return L.T("{0} / {1} écrans allumés", on, Mons.Count) + (hdr > 0 ? "  ·  " + L.T("HDR sur {0}", hdr) : "");
             }
         }
 
@@ -185,7 +187,7 @@ namespace LnkScreenManager
             Rectangle r; int hz;
             bool known = Layout.Bounds(m, out r, out hz);
             string res = known ? r.Width + " × " + r.Height + (hz > 0 ? "  ·  " + hz + " Hz" : "") : "";
-            string d = m.Active ? res + (m.Primary ? "  ·  principal" : "") : "Éteint" + (known ? "  ·  " + res : "");
+            string d = m.Active ? res + (m.Primary ? "  ·  " + L.T("principal") : "") : L.T("Éteint") + (known ? "  ·  " + res : "");
             return m.HasCustomName ? m.Model + "  ·  " + d : d;
         }
 
@@ -259,26 +261,26 @@ namespace LnkScreenManager
             var target = Mons.Where(x => x.Active).Select(x => x.DevicePath).ToList();
             if (on) { if (!target.Contains(m.DevicePath)) target.Add(m.DevicePath); }
             else target.Remove(m.DevicePath);
-            if (target.Count == 0) { SetStatus("Il faut garder au moins un écran allumé.", true); Refresh(); return; }
+            if (target.Count == 0) { SetStatus(L.T("Il faut garder au moins un écran allumé."), true); Refresh(); return; }
             string path = m.DevicePath, name = m.Name;
-            Run((on ? "Allumage de " : "Extinction de ") + name + "…",
+            Run(L.T(on ? "Allumage de {0}…" : "Extinction de {0}…", name),
                 () => { Displays.SetActive(target); Displays.WaitFor(l => l.Any(x => x.DevicePath == path && x.Active == on)); },
-                name + (on ? " allumé." : " éteint."));
+                L.T(on ? "{0} allumé." : "{0} éteint.", name));
         }
 
         public void SetHdr(Monitor m, bool on)
         {
             string name = m.Name;
-            Run("HDR…", () => { Displays.SetHdr(m, on); Thread.Sleep(300); }, "HDR " + (on ? "activé" : "coupé") + " sur " + name + ".");
+            Run("HDR…", () => { Displays.SetHdr(m, on); Thread.Sleep(300); }, L.T(on ? "HDR activé sur {0}." : "HDR coupé sur {0}.", name));
         }
 
-        public void ApplyProfile(Profile p) { Run("Profil « " + p.Name + " »…", () => Profiles.Apply(p), "Profil « " + p.Name + " » appliqué."); }
+        public void ApplyProfile(Profile p) { Run(L.T("Profil « {0} »…", p.Name), () => Profiles.Apply(p), L.T("Profil « {0} » appliqué.", p.Name)); }
 
-        public void AllOn() { Run("Allumage de tous les écrans…", () => { Displays.AllOn(); Thread.Sleep(1500); }, "Tous les écrans sont allumés."); }
+        public void AllOn() { Run(L.T("Allumage de tous les écrans…"), () => { Displays.AllOn(); Thread.Sleep(1500); }, L.T("Tous les écrans sont allumés.")); }
 
         public void AllHdrOff()
         {
-            Run("Coupure du HDR…", () => { foreach (var m in Displays.List().Where(x => x.Active && x.HdrOn)) Displays.SetHdr(m, false); Thread.Sleep(300); }, "HDR coupé partout.");
+            Run(L.T("Coupure du HDR…"), () => { foreach (var m in Displays.List().Where(x => x.Active && x.HdrOn)) Displays.SetHdr(m, false); Thread.Sleep(300); }, L.T("HDR coupé partout."));
         }
 
         public void Identify(Monitor only)
@@ -288,7 +290,7 @@ namespace LnkScreenManager
             {
                 if (!m.Active || (only != null && m.DevicePath != only.DevicePath)) continue;
                 var sc = Screen.AllScreens.FirstOrDefault(s => s.DeviceName == m.GdiName);
-                if (sc != null) new IdentifyForm(sc.Bounds, Number(m), m.HasCustomName ? m.Name + "  (" + m.Model + ")" : m.Name).Show();
+                if (sc != null) new IdentifyForm(sc.Bounds, Number(m), m.HasCustomName ? m.Name + "  (" + m.Model + ")" : m.Name, Win.DpiOf(sc) / 96f).Show();
             }
         }
 
@@ -297,10 +299,10 @@ namespace LnkScreenManager
         public void RenameScreen(Monitor m)
         {
             if (m == null) return;
-            string n = Dialogs.Prompt(Owner, "Renommer l'écran", "Nom pour « " + m.Model + " »  (vide = nom d'origine) :", m.HasCustomName ? m.Name : "");
+            string n = Dialogs.Prompt(Owner, L.T("Renommer l'écran"), L.T("Nom pour « {0} »  (vide = nom d'origine) :", m.Model), m.HasCustomName ? m.Name : "");
             if (n == null) return;
-            try { Names.Set(m.DevicePath, n); Refresh(); SetStatus(n.Length == 0 ? m.Model + " a repris son nom d'origine." : "Écran renommé en « " + n + " ».", false); }
-            catch (Exception ex) { SetStatus("Nom non enregistré : " + ex.Message, true); }
+            try { Names.Set(m.DevicePath, n); Refresh(); SetStatus(n.Length == 0 ? L.T("{0} a repris son nom d'origine.", m.Model) : L.T("Écran renommé en « {0} ».", n), false); }
+            catch (Exception ex) { SetStatus(L.T("Nom non enregistré : {0}", ex.Message), true); }
         }
 
         public void ResetScreenName(Monitor m) { try { Names.Set(m.DevicePath, ""); Refresh(); } catch (Exception ex) { SetStatus(ex.Message, true); } }
@@ -308,7 +310,7 @@ namespace LnkScreenManager
         // ------------------------------------------------ profils
         public void NewProfile()
         {
-            string name = Dialogs.Prompt(Owner, "Nouveau profil", "Nom du profil (l'état actuel des écrans est enregistré) :", ProfileList.Count == 0 ? "Jeu" : "");
+            string name = Dialogs.Prompt(Owner, L.T("Nouveau profil"), L.T("Nom du profil (l'état actuel des écrans est enregistré) :"), ProfileList.Count == 0 ? L.T("Jeu") : "");
             if (string.IsNullOrEmpty(name)) return;
             name = name.Replace("|", "");
             var all = Profiles.Load();
@@ -316,19 +318,19 @@ namespace LnkScreenManager
             var np = Profiles.FromCurrent(name);
             if (i >= 0) all[i] = np; else all.Add(np);
             Profiles.Save(all);
-            Refresh(); SetStatus("Profil « " + name + " » enregistré.", false);
+            Refresh(); SetStatus(L.T("Profil « {0} » enregistré.", name), false);
         }
 
         public void ReplaceProfile(Profile p)
         {
             var all = Profiles.Load(); int i = all.FindIndex(x => x.Name == p.Name);
             if (i >= 0) { all[i] = Profiles.FromCurrent(p.Name); Profiles.Save(all); }
-            Refresh(); SetStatus("Profil « " + p.Name + " » mis à jour.", false);
+            Refresh(); SetStatus(L.T("Profil « {0} » mis à jour.", p.Name), false);
         }
 
         public void RenameProfile(Profile p)
         {
-            string n = Dialogs.Prompt(Owner, "Renommer le profil", "Nouveau nom :", p.Name);
+            string n = Dialogs.Prompt(Owner, L.T("Renommer le profil"), L.T("Nouveau nom :"), p.Name);
             if (string.IsNullOrEmpty(n)) return;
             var all = Profiles.Load(); var x = all.FirstOrDefault(q => q.Name == p.Name);
             if (x != null) { x.Name = n.Replace("|", ""); Profiles.Save(all); }
@@ -337,13 +339,13 @@ namespace LnkScreenManager
 
         public void DeleteProfile(Profile p)
         {
-            if (!Dialogs.Confirm(Owner, "Supprimer le profil", "Supprimer le profil « " + p.Name + " » ?", "Supprimer")) return;
+            if (!Dialogs.Confirm(Owner, L.T("Supprimer le profil"), L.T("Supprimer le profil « {0} » ?", p.Name), L.T("Supprimer"))) return;
             var all = Profiles.Load(); all.RemoveAll(x => x.Name == p.Name); Profiles.Save(all);
-            Refresh(); SetStatus("Profil supprimé.", false);
+            Refresh(); SetStatus(L.T("Profil supprimé."), false);
         }
 
-        public void MakeShortcut(string profile) { CreateShortcut("LNK - " + profile, "--profile \"" + profile + "\"", Brand.Name + " - profil " + profile); }
-        public void MakePlayShortcut(Game g) { CreateShortcut("Jouer en HDR - " + g.Name, "--play \"" + g.Key + "\"", "Active le HDR puis lance " + g.Name); }
+        public void MakeShortcut(string profile) { CreateShortcut("LNK - " + profile, "--profile \"" + profile + "\"", L.T("{0} - profil {1}", Brand.Name, profile)); }
+        public void MakePlayShortcut(Game g) { CreateShortcut(L.T("Jouer en HDR - {0}", g.Name), "--play \"" + g.Key + "\"", L.T("Active le HDR puis lance {0}", g.Name)); }
 
         void CreateShortcut(string title, string args, string desc)
         {
@@ -363,9 +365,9 @@ namespace LnkScreenManager
                 set("IconLocation", Application.ExecutablePath + ",0");
                 set("Description", desc);
                 st.InvokeMember("Save", BindingFlags.InvokeMethod, null, sc, null);
-                SetStatus("Raccourci « " + safe + " » créé sur le bureau.", false);
+                SetStatus(L.T("Raccourci « {0} » créé sur le bureau.", safe), false);
             }
-            catch (Exception ex) { SetStatus("Raccourci impossible : " + ex.Message, true); }
+            catch (Exception ex) { SetStatus(L.T("Raccourci impossible : {0}", ex.Message), true); }
             finally
             {
                 if (sc != null) Marshal.FinalReleaseComObject(sc);
@@ -430,7 +432,7 @@ namespace LnkScreenManager
             if (ProfileList.Count > 0)
             {
                 menu.Items.Add(new ToolStripSeparator());
-                menu.Items.Add(Menus.Header("Profils"));
+                menu.Items.Add(Menus.Header(L.T("Profils")));
                 foreach (var p0 in ProfileList)
                 {
                     var p = p0;
@@ -441,7 +443,7 @@ namespace LnkScreenManager
             }
 
             menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add(Menus.Header("Écrans"));
+            menu.Items.Add(Menus.Header(L.T("Écrans")));
             foreach (var m0 in Mons)
             {
                 var m = m0;
@@ -465,17 +467,17 @@ namespace LnkScreenManager
             }
 
             menu.Items.Add(new ToolStripSeparator());
-            var auto = Menus.Item("HDR auto pour les jeux", (s, e) => { Settings.AutoHdrGames = !Settings.AutoHdrGames; ApplyGameSettings(); if (Changed != null) Changed(); });
+            var auto = Menus.Item(L.T("HDR auto pour les jeux"), (s, e) => { Settings.AutoHdrGames = !Settings.AutoHdrGames; ApplyGameSettings(); if (Changed != null) Changed(); });
             auto.Checked = Settings.AutoHdrGames;
             menu.Items.Add(auto);
-            menu.Items.Add(Menus.Item("Tout allumer", (s, e) => AllOn()));
-            menu.Items.Add(Menus.Item("Identifier les écrans", (s, e) => Identify(null)));
+            menu.Items.Add(Menus.Item(L.T("Tout allumer"), (s, e) => AllOn()));
+            menu.Items.Add(Menus.Item(L.T("Identifier les écrans"), (s, e) => Identify(null)));
             menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add(Menus.Item("Écrans", (s, e) => ShowMain(Page.Screens)));
-            menu.Items.Add(Menus.Item("Jeux", (s, e) => ShowMain(Page.Games)));
-            menu.Items.Add(Menus.Item("Réglages", (s, e) => ShowMain(Page.Settings)));
+            menu.Items.Add(Menus.Item(L.T("Écrans"), (s, e) => ShowMain(Page.Screens)));
+            menu.Items.Add(Menus.Item(L.T("Jeux"), (s, e) => ShowMain(Page.Games)));
+            menu.Items.Add(Menus.Item(L.T("Réglages"), (s, e) => ShowMain(Page.Settings)));
             menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add(Menus.Item("Quitter", (s, e) => Exit()));
+            menu.Items.Add(Menus.Item(L.T("Quitter"), (s, e) => Exit()));
         }
 
         // ------------------------------------------------ fenetre
@@ -507,7 +509,7 @@ namespace LnkScreenManager
             if (!Settings.TrayOnClose) { Exit(); return; }
             if (!Settings.TrayHintShown)
             {
-                tray.ShowBalloonTip(5000, Brand.Name, "Toujours disponible près de l'heure (clic droit : profils, écrans, HDR). Désactivable dans Réglages.", ToolTipIcon.None);
+                tray.ShowBalloonTip(5000, Brand.Name, L.T("Toujours disponible près de l'heure (clic droit : profils, écrans, HDR). Désactivable dans Réglages."), ToolTipIcon.None);
                 Settings.TrayHintShown = true;
             }
         }
@@ -539,8 +541,9 @@ namespace LnkScreenManager
         [STAThread]
         static int Main(string[] args)
         {
-            Win.SetProcessDPIAware();
-            using (var g = Graphics.FromHwnd(IntPtr.Zero)) Theme.S = g.DpiX / 96f;
+            Win.EnableDpiAwareness();
+            Theme.SetScale(Win.SystemDpi / 96f);
+            L.Apply(Settings.Language);
             string a0 = args.Length > 0 ? args[0].ToLowerInvariant() : "";
 
             try
@@ -556,7 +559,7 @@ namespace LnkScreenManager
                 if (a0 == "--profile" && args.Length >= 2)
                 {
                     var p = Profiles.Load().FirstOrDefault(x => string.Equals(x.Name, args[1], StringComparison.OrdinalIgnoreCase));
-                    if (p == null) { MessageBox.Show("Profil introuvable : " + args[1], Brand.Name); return 1; }
+                    if (p == null) { MessageBox.Show(L.T("Profil introuvable : {0}", args[1]), Brand.Name); return 1; }
                     Profiles.Apply(p); Signal(RefreshEvent); return 0;
                 }
                 if (a0 == "--all-on") { Displays.AllOn(); Signal(RefreshEvent); return 0; }

@@ -42,11 +42,11 @@ namespace LnkScreenManager
         {
             get
             {
-                if (Wiki == null) return SteamId != null ? "info HDR en attente" : "pas d'info HDR automatique";
-                if (Wiki == "true" || Wiki == "always on") return "HDR natif";
-                if (Wiki == "limited") return "HDR (limité)";
-                if (Wiki == "false" || Wiki == "hackable" || Wiki == "n/a") return "pas de HDR";
-                return "HDR inconnu";
+                if (Wiki == null) return L.T(SteamId != null ? "info HDR en attente" : "pas d'info HDR automatique");
+                if (Wiki == "true" || Wiki == "always on") return L.T("HDR natif");
+                if (Wiki == "limited") return L.T("HDR (limité)");
+                if (Wiki == "false" || Wiki == "hackable" || Wiki == "n/a") return L.T("pas de HDR");
+                return L.T("HDR inconnu");
             }
         }
     }
@@ -392,10 +392,10 @@ namespace LnkScreenManager
             if (!Follow(s, pid)) return;
             sessions.Add(s);
             var mon = Displays.List().FirstOrDefault(m => m.DevicePath == screen);
-            if (mon == null || !mon.Active || !mon.HdrSupported) { app.SetStatus(g.Name + " : l'écran du jeu ne gère pas le HDR.", false); return; }
+            if (mon == null || !mon.Active || !mon.HdrSupported) { app.SetStatus(L.T("{0} : l'écran du jeu ne gère pas le HDR.", g.Name), false); return; }
             if (mon.HdrOn) return; // deja en HDR (par toi ou un autre jeu) : on ne touchera a rien a la fermeture
             s.WeTurnedOn = true;
-            app.HdrAuto(mon, true, "HDR activé pour " + g.Name + ".");
+            app.HdrAuto(mon, true, L.T("HDR activé pour {0}.", g.Name));
         }
 
         /// Attend la fin du processus sans sondage (handle du processus surveille par Windows).
@@ -430,7 +430,7 @@ namespace LnkScreenManager
             var heir = sessions.FirstOrDefault(x => x.Screen == s.Screen);
             if (heir != null) { heir.WeTurnedOn = true; return; }
             var mon = Displays.List().FirstOrDefault(m => m.DevicePath == s.Screen);
-            if (mon != null && mon.Active && mon.HdrOn) app.HdrAuto(mon, false, "HDR coupé : " + s.G.Name + " fermé.");
+            if (mon != null && mon.Active && mon.HdrOn) app.HdrAuto(mon, false, L.T("HDR coupé : {0} fermé.", s.G.Name));
         }
     }
 
@@ -440,7 +440,7 @@ namespace LnkScreenManager
         public static int Play(string key)
         {
             var g = Games.All.FirstOrDefault(x => string.Equals(x.Key, key, StringComparison.OrdinalIgnoreCase));
-            if (g == null) { MessageBox.Show("Jeu introuvable : " + key, Brand.Name); return 1; }
+            if (g == null) { MessageBox.Show(L.T("Jeu introuvable : {0}", key), Brand.Name); return 1; }
 
             var mons = Displays.List();
             Monitor target = string.IsNullOrEmpty(Settings.HdrTarget) ? null : mons.FirstOrDefault(m => m.DevicePath == Settings.HdrTarget);

@@ -1,14 +1,19 @@
 ﻿// LNK Screen Manager - fenetre principale (menu lateral) et pages Ecrans / Jeux / Reglages.
 // By LNK Co (c) 2026
 //
-// Chaque page est dimensionnee pour tenir dans la fenetre sans defilement
-// (la grille des jeux adapte son nombre de colonnes ; defilement seulement en dernier recours).
+// - Chaque page tient dans la fenetre sans defilement : la fenetre se dimensionne sur le contenu,
+//   et sur les petits ecrans chaque page passe en mise en page compacte (defilement en dernier recours).
+// - Net a toutes les echelles d'affichage : quand la fenetre change d'ecran (DPI different),
+//   l'interface est reconstruite a la nouvelle echelle.
+// - Aides de test (variables d'environnement) : LNK_SCALE=1.5  LNK_WORKAREA=1366x728
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace LnkScreenManager
@@ -18,65 +23,126 @@ namespace LnkScreenManager
     // ------------------------------------------------------------------ Fenetre principale
     class MainForm : Form
     {
+        const int WM_DPICHANGED = 0x02E0;
+        [StructLayout(LayoutKind.Sequential)] struct RECT { public int l, t, r, b; }
+
         readonly TrayApp app;
-        readonly Sidebar side;
         readonly Panel host = new Panel();
-        readonly StatusLine status;
         readonly Dictionary<Page, PageBase> pages = new Dictionary<Page, PageBase>();
-        Page current = (Page)(-1);
+        Sidebar side;
+        StatusLine status;
+        Page current;
+        int shownPage = -1;
+
+        static float? TestScale
+        {
+            get
+            {
+                var v = Environment.GetEnvironmentVariable("LNK_SCALE"); float f;
+                return v != null && float.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out f) ? f : (float?)null;
+            }
+        }
+
+        static Rectangle WorkArea(Screen s)
+        {
+            var v = Environment.GetEnvironmentVariable("LNK_WORKAREA");
+            if (v != null)
+            {
+                var p = v.Split('x'); int w, h;
+                if (p.Length == 2 && int.TryParse(p[0], out w) && int.TryParse(p[1], out h)) return new Rectangle(s.WorkingArea.X, s.WorkingArea.Y, w, h);
+            }
+            return s.WorkingArea;
+        }
 
         public MainForm(TrayApp app, Page page)
         {
-            this.app = app;
-            Text = Brand.Name; Font = Theme.F(10f, false); AutoScaleMode = AutoScaleMode.None;
-            StartPosition = FormStartPosition.CenterScreen; KeyPreview = true;
-            Icon = LogoArt.AppIcon(Theme.D(32));
+            this.app = app; current = page;
+            Text = Brand.Name; AutoScaleMode = AutoScaleMode.None;
+            StartPosition = FormStartPosition.Manual; KeyPreview = true;
             SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
-
-            side = new Sidebar(this) { Dock = DockStyle.Left };
-            status = new StatusLine(app) { Dock = DockStyle.Bottom };
             host.Dock = DockStyle.Fill;
-            Controls.Add(host); Controls.Add(status); Controls.Add(side);
+            Controls.Add(host);
 
-            pages[Page.Screens] = new ScreensPage(app);
-            pages[Page.Games] = new GamesPage(app);
-            pages[Page.Settings] = new SettingsPage(app);
-            foreach (var p in pages.Values) { p.Dock = DockStyle.Fill; p.Visible = false; host.Controls.Add(p); }
-
-            ApplyColors();
-            foreach (var p in pages.Values) p.Render();
-            SizeWindow();
+            var scr = Screen.FromPoint(Cursor.Position);
+            Theme.SetScale(TestScale ?? Win.DpiOf(scr) / 96f);
+            Build();
+            var wa = WorkArea(scr);
+            SizeWindow(wa);
+            Location = new Point(wa.X + (wa.Width - Width) / 2, wa.Y + Math.Max(0, (wa.Height - Height) / 2));
 
             app.Changed += OnChanged;
             app.GamesUpdated += OnGames;
             Theme.Changed += OnTheme;
+            L.Changed += OnLanguage;
             Activated += (s, e) => app.RefreshIfStale();
-            ShowPage(page);
+        }
+
+        void Build()
+        {
+            SuspendLayout();
+            Icon = LogoArt.AppIcon(Theme.D(32));
+            Font = Theme.F(10f, false);
+            side = new Sidebar(this) { Dock = DockStyle.Left };
+            status = new StatusLine(app) { Dock = DockStyle.Bottom };
+            Controls.Add(status); Controls.Add(side);
+            pages[Page.Screens] = new ScreensPage(app);
+            pages[Page.Games] = new GamesPage(app);
+            pages[Page.Settings] = new SettingsPage(app);
+            foreach (var p in pages.Values) { p.Dock = DockStyle.Fill; p.Visible = false; host.Controls.Add(p); }
+            ApplyColors();
+            foreach (var p in pages.Values) p.Render();
+            ResumeLayout();
+            shownPage = -1;
+            ShowPage(current);
+        }
+
+        void Teardown()
+        {
+            Controls.Remove(side); Controls.Remove(status);
+            side.Dispose(); status.Dispose();
+            foreach (var p in pages.Values) { host.Controls.Remove(p); p.Dispose(); }
+            pages.Clear();
+        }
+
+        /// Reconstruit l'interface (changement d'echelle ou de langue).
+        void Rebuild(Rectangle? suggested)
+        {
+            var loc = suggested.HasValue ? suggested.Value.Location : Location;
+            SuspendLayout();
+            Teardown();
+            Build();
+            var scr = suggested.HasValue ? Screen.FromRectangle(suggested.Value) : Screen.FromControl(this);
+            SizeWindow(WorkArea(scr));
+            Location = loc;
+            ResumeLayout();
+            Invalidate(true);
         }
 
         /// Taille de fenetre pour que chaque page tienne sans defilement.
-        void SizeWindow()
+        void SizeWindow(Rectangle wa)
         {
-            var wa = Screen.PrimaryScreen.WorkingArea;
             int sideW = side.Width, statusH = status.Height;
-            int maxW = (int)(wa.Width * 0.85) - sideW, maxH = wa.Height - Theme.D(110) - statusH;
-            int w = Theme.D(780);
-            int h = Math.Max(Theme.D(600), Math.Max(pages[Page.Screens].Needed(w, 0), pages[Page.Settings].Needed(w, 0)));
-            var games = (GamesPage)pages[Page.Games];
+            int chromeW = Width - ClientSize.Width, chromeH = Height - ClientSize.Height;
+            int maxW = (int)(wa.Width * 0.9) - sideW - chromeW, maxH = wa.Height - Theme.D(24) - statusH - chromeH;
+            int w = Math.Min(maxW, Theme.D(780));
+            int h = Math.Max(Theme.D(560), Math.Max(pages[Page.Screens].Needed(w, 0), pages[Page.Settings].Needed(w, 0)));
+            var games = pages[Page.Games];
             // jeux : on agrandit d'abord en hauteur (jusqu'a 860 px), puis en largeur
             int capH = Math.Min(maxH, Theme.D(860));
             while (h < capH && games.Needed(w, h) > h) h = Math.Min(capH, h + Theme.D(20));
             while (w < maxW && games.Needed(w, h) > h) w = Math.Min(maxW, w + Theme.D(20));
-            w += Theme.D(4); // marge de securite (arrondis)
+            w = Math.Min(maxW, w + Theme.D(4));
             h = Math.Min(h, maxH);
+            MinimumSize = Size.Empty;
             ClientSize = new Size(sideW + w, h + statusH);
-            MinimumSize = new Size(sideW + Theme.D(560) + (Width - ClientSize.Width), Theme.D(480));
+            MinimumSize = new Size(Math.Min(Width, sideW + Theme.D(520) + chromeW), Math.Min(Height, Theme.D(420)));
         }
 
         public void ShowPage(Page p)
         {
-            if (p == current) return;
             current = p;
+            if ((int)p == shownPage) return;
+            shownPage = (int)p;
             var page = pages[p];
             page.Render();
             page.Visible = true;
@@ -85,8 +151,9 @@ namespace LnkScreenManager
             side.Select(p);
         }
 
-        void OnChanged() { if (IsDisposed) return; status.Invalidate(); if (current >= 0) pages[current].Render(); }
+        void OnChanged() { if (IsDisposed) return; status.Invalidate(); pages[current].Render(); }
         void OnGames() { if (!IsDisposed) pages[Page.Games].Render(); }
+        void OnLanguage() { if (!IsDisposed) Rebuild(null); }
 
         void OnTheme()
         {
@@ -102,6 +169,29 @@ namespace LnkScreenManager
         void ApplyColors() { BackColor = Theme.Bg; host.BackColor = Theme.Bg; side.BackColor = Theme.Side; status.BackColor = Theme.Bg; side.UpdateTheme(); }
 
         protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); Win.Style(Handle); }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            // ouverte sur un ecran a une autre echelle que prevu : on se remet a la bonne echelle
+            float s = Win.DpiOfWindow(Handle) / 96f;
+            if (TestScale == null && Math.Abs(s - Theme.S) > 0.001f) { Theme.SetScale(s); Rebuild(null); }
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == WM_DPICHANGED)
+            {
+                var r = (RECT)Marshal.PtrToStructure(m.LParam, typeof(RECT));
+                var rect = Rectangle.FromLTRB(r.l, r.t, r.r, r.b);
+                float s = (int)(m.WParam.ToInt64() & 0xFFFF) / 96f;
+                if (TestScale == null && Math.Abs(s - Theme.S) > 0.001f) { Theme.SetScale(s); Rebuild(rect); }
+                else Location = rect.Location;
+                m.Result = IntPtr.Zero;
+                return;
+            }
+            base.WndProc(ref m);
+        }
 
         protected override void OnKeyDown(KeyEventArgs e)
         {
@@ -119,7 +209,8 @@ namespace LnkScreenManager
 
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
-            app.Changed -= OnChanged; app.GamesUpdated -= OnGames; Theme.Changed -= OnTheme;
+            app.Changed -= OnChanged; app.GamesUpdated -= OnGames; Theme.Changed -= OnTheme; L.Changed -= OnLanguage;
+            Theme.SetScale(Win.SystemDpi / 96f); // menus et dialogues hors fenetre : echelle de l'ecran principal
             base.OnFormClosed(e);
         }
 
@@ -133,31 +224,32 @@ namespace LnkScreenManager
     // ------------------------------------------------------------------ Menu lateral
     class Sidebar : Smooth
     {
-        readonly MainForm form;
         readonly NavButton[] nav;
         readonly NavButton themeBtn;
 
         public Sidebar(MainForm form)
         {
-            this.form = form; Width = Theme.D(224);
-            nav = new[] { new NavButton(Glyph.Monitor, "Écrans"), new NavButton(Glyph.Game, "Jeux"), new NavButton(Glyph.Settings, "Réglages") };
+            Width = Theme.D(224);
+            nav = new[] { new NavButton(Glyph.Monitor, L.T("Écrans")), new NavButton(Glyph.Game, L.T("Jeux")), new NavButton(Glyph.Settings, L.T("Réglages")) };
             for (int i = 0; i < nav.Length; i++)
             {
                 var p = (Page)i;
                 nav[i].Click += (s, e) => form.ShowPage(p);
                 Controls.Add(nav[i]);
             }
-            themeBtn = new NavButton(Glyph.Sun, "Mode clair");
+            themeBtn = new NavButton(Glyph.Sun, L.T("Mode clair"));
             themeBtn.Click += (s, e) => form.ToggleTheme();
             Controls.Add(themeBtn);
+            UpdateTheme();
         }
 
         public void Select(Page p) { for (int i = 0; i < nav.Length; i++) nav[i].SetSelected(i == (int)p); }
 
         public void UpdateTheme()
         {
+            if (themeBtn == null) return;
             themeBtn.Glyph = Theme.Dark ? Glyph.Sun : Glyph.Moon;
-            themeBtn.Text = Theme.Dark ? "Mode clair" : "Mode sombre";
+            themeBtn.Text = L.T(Theme.Dark ? "Mode clair" : "Mode sombre");
             Invalidate(true);
         }
 
@@ -179,7 +271,7 @@ namespace LnkScreenManager
             Theme.Draw(g, "LNK", Theme.F(8.5f, true), new Rectangle(tx, Theme.D(27), Width - tx, Theme.D(16)), Theme.Accent, TextFormatFlags.Left);
             Theme.Draw(g, "Screen Manager", Theme.F(12f, true), new Rectangle(tx, Theme.D(42), Width - tx, Theme.D(24)), Theme.Text, TextFormatFlags.Left);
             Theme.Draw(g, Brand.By, Theme.F(8.5f, false), new Rectangle(Theme.D(24), Height - Theme.D(56), Width, Theme.D(18)), Theme.Faint, TextFormatFlags.Left);
-            Theme.Draw(g, "Version " + Brand.Version, Theme.F(8.5f, false), new Rectangle(Theme.D(24), Height - Theme.D(38), Width, Theme.D(18)), Theme.Faint, TextFormatFlags.Left);
+            Theme.Draw(g, L.T("Version {0}", Brand.Version), Theme.F(8.5f, false), new Rectangle(Theme.D(24), Height - Theme.D(38), Width, Theme.D(18)), Theme.Faint, TextFormatFlags.Left);
             using (var pen = new Pen(Theme.Border)) g.DrawLine(pen, Width - 1, 0, Width - 1, Height);
         }
     }
@@ -212,8 +304,7 @@ namespace LnkScreenManager
         {
             var g = e.Graphics; Theme.HQ(g); g.Clear(ParentBg);
             float bgT = Math.Max(sel, Hover * 0.7f);
-            var r = new RectangleF(0, 0, Width, Height);
-            if (bgT > 0) Theme.Fill(g, r, Theme.D(10), Color.FromArgb((int)(255 * bgT), Theme.Card));
+            if (bgT > 0) Theme.Fill(g, new RectangleF(0, 0, Width, Height), Theme.D(10), Color.FromArgb((int)(255 * bgT), Theme.Card));
             if (sel > 0)
             {
                 float bh = Height * 0.45f * sel;
@@ -234,10 +325,10 @@ namespace LnkScreenManager
             var g = e.Graphics; g.Clear(Theme.Bg);
             using (var pen = new Pen(Theme.Border)) g.DrawLine(pen, 0, 0, Width, 0);
             int pad = Theme.D(28);
-            string left = string.IsNullOrEmpty(app.Status) ? "Prêt" : app.Status;
-            string right = app.Summary + (Settings.AutoHdrGames ? "   ·   HDR auto jeux actif" : "");
+            string left = string.IsNullOrEmpty(app.Status) ? L.T("Prêt") : app.Status;
+            string right = app.Summary + (Settings.AutoHdrGames ? "   ·   " + L.T("HDR auto jeux actif") : "");
             var f = Theme.F(9f, false);
-            int rw = Theme.Measure(right, f).Width;
+            int rw = Math.Min(Theme.Measure(right, f).Width, Width / 2);
             Theme.Draw(g, left, f, new Rectangle(pad, 0, Width - 2 * pad - rw - Theme.D(20), Height), app.StatusError ? Theme.Danger : Theme.Dim, Theme.Left);
             Theme.Draw(g, right, f, new Rectangle(Width - pad - rw, 0, rw + 2, Height), Theme.Faint, Theme.Left);
         }
@@ -247,6 +338,9 @@ namespace LnkScreenManager
     abstract class PageBase : Panel
     {
         protected readonly TrayApp app;
+        /// Vrai pendant le calcul de la taille de fenetre : on mesure en mise en page confortable.
+        protected bool Sizing;
+
         protected PageBase(TrayApp app)
         {
             this.app = app;
@@ -256,7 +350,12 @@ namespace LnkScreenManager
         public abstract void Render();
         /// Place les controles (si apply) et renvoie la hauteur du contenu.
         protected abstract int Arrange(int width, int height, bool apply);
-        public int Needed(int width, int height) { return Arrange(width, height, false); }
+
+        public int Needed(int width, int height)
+        {
+            Sizing = true;
+            try { return Arrange(width, height, false); } finally { Sizing = false; }
+        }
 
         protected override void OnResize(EventArgs e) { base.OnResize(e); Relayout(); }
 
@@ -266,7 +365,7 @@ namespace LnkScreenManager
             if (arranging || ClientSize.Width <= 0) return;
             arranging = true;
             SuspendLayout();
-            // largeur pleine d'abord ; la barre de defilement n'est retiree de la largeur que si elle est vraiment necessaire
+            // largeur pleine d'abord ; la barre de defilement n'est retiree que si elle est vraiment necessaire
             int width = Width, height = Height;
             bool scroll = Arrange(width, height, false) > height;
             if (scroll) width -= SystemInformation.VerticalScrollBarWidth;
@@ -287,7 +386,15 @@ namespace LnkScreenManager
             return Math.Max(pad, (width - w) / 2);
         }
 
-        public virtual void OnThemeChanged() { BackColor = Theme.Bg; }
+        /// Choisit la mise en page la plus confortable qui tient dans la hauteur disponible.
+        protected int Fit(int width, int height, bool apply, int modes, Func<int, int, bool, int> arrange)
+        {
+            if (Sizing || height <= 0) return arrange(width, 0, apply);
+            for (int m = 0; m < modes - 1; m++) if (arrange(width, m, false) <= height) return arrange(width, m, apply);
+            return arrange(width, modes - 1, apply);
+        }
+
+        public virtual void OnThemeChanged() { BackColor = Theme.Bg; Invalidate(true); }
     }
 
     /// Ligne de reglage : libelle, explication, controle a droite.
@@ -301,6 +408,9 @@ namespace LnkScreenManager
             Height = Theme.D(sub == null ? 52 : 60);
             Controls.Add(side);
         }
+        public int Comfort { get { return Theme.D(Sub == null ? 52 : 60); } }
+        public int Compact { get { return Theme.D(Sub == null ? 44 : 50); } }
+
         protected override void OnLayout(LayoutEventArgs e)
         {
             base.OnLayout(e);
@@ -316,8 +426,8 @@ namespace LnkScreenManager
             if (Sub == null) Theme.Draw(g, Text, Theme.F(10.5f, false), new Rectangle(Theme.D(18), 0, w, Height), Theme.Text, Theme.Left);
             else
             {
-                Theme.Draw(g, Text, Theme.F(10.5f, false), new Rectangle(Theme.D(18), Theme.D(10), w, Theme.D(20)), Theme.Text, TextFormatFlags.EndEllipsis);
-                Theme.Draw(g, Sub, Theme.F(9f, false), new Rectangle(Theme.D(18), Theme.D(32), w, Theme.D(18)), Theme.Dim, TextFormatFlags.EndEllipsis);
+                Theme.Draw(g, Text, Theme.F(10.5f, false), new Rectangle(Theme.D(18), Height / 2 - Theme.D(20), w, Theme.D(20)), Theme.Text, TextFormatFlags.EndEllipsis);
+                Theme.Draw(g, Sub, Theme.F(9f, false), new Rectangle(Theme.D(18), Height / 2 + Theme.D(2), w, Theme.D(18)), Theme.Dim, TextFormatFlags.EndEllipsis);
             }
         }
         public void OnThemeChanged() { BackColor = Theme.Card; Invalidate(true); }
@@ -326,10 +436,10 @@ namespace LnkScreenManager
     // ------------------------------------------------------------------ Page Ecrans
     class ScreensPage : PageBase
     {
-        readonly PageTitle title = new PageTitle("Écrans", null);
-        readonly Pill btnIdentify = new Pill("Identifier", Glyph.Identify), btnAllOn = new Pill("Tout allumer", Glyph.Power);
+        readonly PageTitle title = new PageTitle(L.T("Écrans"), null);
+        readonly Pill btnIdentify = new Pill(L.T("Identifier"), Glyph.Identify), btnAllOn = new Pill(L.T("Tout allumer"), Glyph.Power);
         readonly LayoutMap map = new LayoutMap();
-        readonly SectionHeader secList = new SectionHeader("Moniteurs") { Columns = true }, secProfiles = new SectionHeader("Profils");
+        readonly SectionHeader secList = new SectionHeader(L.T("Moniteurs")) { Columns = true }, secProfiles = new SectionHeader(L.T("Profils"));
         readonly List<MonitorCard> cards = new List<MonitorCard>();
         readonly List<Pill> pills = new List<Pill>();
         readonly ContextMenuStrip menu = Menus.Create();
@@ -341,10 +451,10 @@ namespace LnkScreenManager
             Controls.AddRange(new Control[] { title, btnIdentify, btnAllOn, map, secList, secProfiles });
             btnIdentify.Click += (s, e) => app.Identify(null);
             btnAllOn.Click += (s, e) => app.AllOn();
-            tips.SetToolTip(map, "Double-clic : allumer / éteindre");
+            tips.SetToolTip(map, L.T("Double-clic : allumer / éteindre"));
             map.HoverChanged += (s, e) => { foreach (var c in cards) c.SetHighlight(c.Number == map.Hot); };
             map.ItemDoubleClicked += n => { var c = cards.FirstOrDefault(x => x.Number == n); if (c != null) app.ToggleScreen(c.M, !c.M.Active); };
-            menu.Closed += (s, e) => BeginInvoke((Action)(() => Menus.Clear(menu)));
+            menu.Closed += (s, e) => { if (IsHandleCreated) BeginInvoke((Action)(() => Menus.Clear(menu))); };
         }
 
         protected override void Dispose(bool disposing) { if (disposing) { menu.Dispose(); tips.Dispose(); } base.Dispose(disposing); }
@@ -394,58 +504,62 @@ namespace LnkScreenManager
                         if (e.Button == MouseButtons.Left) app.ApplyProfile(p);
                         else if (e.Button == MouseButtons.Right) ShowProfileMenu(pill, p, e.Location);
                     };
-                    tips.SetToolTip(pill, "Clic : appliquer · clic droit : options");
+                    tips.SetToolTip(pill, L.T("Clic : appliquer · clic droit : options"));
                     pills.Add(pill); Controls.Add(pill);
                 }
-                var add = new Pill("Nouveau profil", Glyph.Add) { Dashed = true };
+                var add = new Pill(L.T("Nouveau profil"), Glyph.Add) { Dashed = true };
                 add.Click += (s, e) => app.NewProfile();
-                tips.SetToolTip(add, "Enregistrer l'état actuel des écrans comme profil");
+                tips.SetToolTip(add, L.T("Enregistrer l'état actuel des écrans comme profil"));
                 pills.Add(add); Controls.Add(add);
             }
             Relayout();
         }
 
-        protected override int Arrange(int width, int height, bool apply)
+        protected override int Arrange(int width, int height, bool apply) { return Fit(width, height, apply, 3, Do); }
+
+        // mode 0 : confortable · 1 : compact · 2 : compact sans mini-carte
+        int Do(int width, int mode, bool apply)
         {
+            bool cozy = mode == 0;
             int w; int x = Content(width, 900, out w);
-            int y = Theme.D(20);
+            int y = Theme.D(cozy ? 20 : 12);
             Place(title, x, y, w - btnAllOn.Width - btnIdentify.Width - Theme.D(16), title.Height, apply);
             int by = y + (title.Height - btnAllOn.Height) / 2;
             Place(btnAllOn, x + w - btnAllOn.Width, by, btnAllOn.Width, btnAllOn.Height, apply);
             Place(btnIdentify, x + w - btnAllOn.Width - Theme.D(8) - btnIdentify.Width, by, btnIdentify.Width, btnIdentify.Height, apply);
-            y += title.Height + Theme.D(12);
+            y += title.Height + Theme.D(cozy ? 12 : 6);
 
-            if (apply) map.Visible = Settings.ShowMap;
-            if (Settings.ShowMap) { Place(map, x, y, w, map.Height, apply); y += map.Height + Theme.D(20); }
+            bool showMap = Settings.ShowMap && mode < 2;
+            if (apply) map.Visible = showMap;
+            if (showMap) { int mh = Theme.D(cozy ? 150 : 104); Place(map, x, y, w, mh, apply); y += mh + Theme.D(cozy ? 20 : 12); }
 
-            Place(secList, x, y, w, secList.Height, apply); y += secList.Height + Theme.D(4);
-            foreach (var c in cards) { Place(c, x, y, w, c.Height, apply); y += c.Height + Theme.D(8); }
-            y += Theme.D(14);
+            Place(secList, x, y, w, secList.Height, apply); y += secList.Height + Theme.D(cozy ? 4 : 2);
+            int ch = Theme.D(cozy ? 64 : 54), cg = Theme.D(cozy ? 8 : 6);
+            foreach (var c in cards) { Place(c, x, y, w, ch, apply); y += ch + cg; }
+            y += Theme.D(cozy ? 14 : 8);
 
-            Place(secProfiles, x, y, w, secProfiles.Height, apply); y += secProfiles.Height + Theme.D(6);
+            Place(secProfiles, x, y, w, secProfiles.Height, apply); y += secProfiles.Height + Theme.D(cozy ? 6 : 4);
             int px = x, gap = Theme.D(8), ph = Theme.D(34);
             foreach (var p in pills)
             {
                 if (px > x && px + p.Width > x + w) { px = x; y += ph + gap; }
                 Place(p, px, y, p.Width, p.Height, apply); px += p.Width + gap;
             }
-            y += ph + Theme.D(24);
+            y += ph + Theme.D(cozy ? 24 : 12);
             return y;
         }
-
-        public override void OnThemeChanged() { base.OnThemeChanged(); Invalidate(true); }
 
         void ShowScreenMenu(MonitorCard card, Point pt)
         {
             var m = card.M;
             Menus.Clear(menu);
             menu.Items.Add(Menus.Header(m.Model));
-            menu.Items.Add(Menus.Item("Renommer…", (s, e) => app.RenameScreen(m)));
-            if (m.HasCustomName) menu.Items.Add(Menus.Item("Reprendre le nom d'origine", (s, e) => app.ResetScreenName(m)));
+            menu.Items.Add(Menus.Item(L.T("Renommer…"), (s, e) => app.RenameScreen(m)));
+            if (m.HasCustomName) menu.Items.Add(Menus.Item(L.T("Reprendre le nom d'origine"), (s, e) => app.ResetScreenName(m)));
             menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add(Menus.Item(m.Active ? "Éteindre" : "Allumer", (s, e) => app.ToggleScreen(m, !m.Active)));
-            if (m.Active && m.HdrSupported) menu.Items.Add(Menus.Item(m.HdrOn ? "Couper le HDR" : "Activer le HDR", (s, e) => app.SetHdr(m, !m.HdrOn)));
-            if (m.Active) menu.Items.Add(Menus.Item("Identifier", (s, e) => app.Identify(m)));
+            menu.Items.Add(Menus.Item(L.T(m.Active ? "Éteindre" : "Allumer"), (s, e) => app.ToggleScreen(m, !m.Active)));
+            if (m.Active && m.HdrSupported) menu.Items.Add(Menus.Item(L.T(m.HdrOn ? "Couper le HDR" : "Activer le HDR"), (s, e) => app.SetHdr(m, !m.HdrOn)));
+            if (m.Active) menu.Items.Add(Menus.Item(L.T("Identifier"), (s, e) => app.Identify(m)));
             menu.Show(card, pt);
         }
 
@@ -453,12 +567,12 @@ namespace LnkScreenManager
         {
             Menus.Clear(menu);
             menu.Items.Add(Menus.Header(p.Name));
-            menu.Items.Add(Menus.Item("Appliquer", (s, e) => app.ApplyProfile(p)));
-            menu.Items.Add(Menus.Item("Remplacer par l'état actuel", (s, e) => app.ReplaceProfile(p)));
-            menu.Items.Add(Menus.Item("Raccourci sur le bureau", (s, e) => app.MakeShortcut(p.Name)));
-            menu.Items.Add(Menus.Item("Renommer…", (s, e) => app.RenameProfile(p)));
+            menu.Items.Add(Menus.Item(L.T("Appliquer"), (s, e) => app.ApplyProfile(p)));
+            menu.Items.Add(Menus.Item(L.T("Remplacer par l'état actuel"), (s, e) => app.ReplaceProfile(p)));
+            menu.Items.Add(Menus.Item(L.T("Raccourci sur le bureau"), (s, e) => app.MakeShortcut(p.Name)));
+            menu.Items.Add(Menus.Item(L.T("Renommer…"), (s, e) => app.RenameProfile(p)));
             menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add(Menus.Danger("Supprimer", (s, e) => app.DeleteProfile(p)));
+            menu.Items.Add(Menus.Danger(L.T("Supprimer"), (s, e) => app.DeleteProfile(p)));
             menu.Show(anchor, pt);
         }
     }
@@ -489,7 +603,7 @@ namespace LnkScreenManager
 
         public GameTile(Game g)
         {
-            G = g; Hoverable = true; Height = Theme.D(GamesPage.TileH);
+            G = g; Hoverable = true; Height = Theme.D(56);
             Tg.Checked = g.AutoHdr;
             Tg.Under = () => TileColor;
             Controls.Add(Tg);
@@ -499,7 +613,7 @@ namespace LnkScreenManager
         Color TileColor { get { return Theme.Mix(Theme.Card, Theme.CardHover, Hover); } }
 
         protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); if (e.Button == MouseButtons.Right && MenuRequested != null) MenuRequested(e.Location); }
-        protected override void OnLayout(LayoutEventArgs e) { base.OnLayout(e); Tg.Location = new Point(Width - Theme.D(14) - Tg.Width, (Height - Tg.Height) / 2); }
+        protected override void OnLayout(LayoutEventArgs e) { base.OnLayout(e); Tg.Location = new Point(Width - Theme.D(12) - Tg.Width, (Height - Tg.Height) / 2); }
 
         protected override void OnPaint(PaintEventArgs e)
         {
@@ -507,20 +621,22 @@ namespace LnkScreenManager
             var r = new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f);
             Theme.Fill(g, r, Theme.D(10), TileColor);
             Theme.Stroke(g, r, Theme.D(10), G.AutoHdr ? Theme.Mix(Theme.Border, Theme.Accent, 0.55f) : Theme.Border, 1f, false);
-            int w = Tg.Left - Theme.D(26);
-            Theme.Draw(g, G.Name, Theme.F(10f, true), new Rectangle(Theme.D(14), Theme.D(9), w, Theme.D(20)), Theme.Text, TextFormatFlags.EndEllipsis);
-            string sub = G.Source + "  ·  " + G.WikiLabel + (G.User >= 0 ? "  ·  manuel" : "");
-            Theme.Draw(g, sub, Theme.F(8.5f, false), new Rectangle(Theme.D(14), Theme.D(30), w, Theme.D(18)), G.WikiHdr ? Theme.Accent : Theme.Dim, TextFormatFlags.EndEllipsis);
+            int w = Tg.Left - Theme.D(24);
+            Theme.Draw(g, G.Name, Theme.F(10f, true), new Rectangle(Theme.D(13), Height / 2 - Theme.D(19), w, Theme.D(20)), Theme.Text, TextFormatFlags.EndEllipsis);
+            // tuile etroite (petit ecran) : on ne garde que l'info HDR, la plus utile
+            string sub = Width < Theme.D(210) ? G.WikiLabel : L.T(G.Source) + "  ·  " + G.WikiLabel + (G.User >= 0 ? "  ·  " + L.T("manuel") : "");
+            Theme.Draw(g, sub, Theme.F(8.5f, false), new Rectangle(Theme.D(13), Height / 2 + Theme.D(1), w, Theme.D(18)), G.WikiHdr ? Theme.Accent : Theme.Dim, TextFormatFlags.EndEllipsis);
         }
     }
 
     class GamesPage : PageBase
     {
-        public const int TileH = 56, TileMinW = 220, Gap = 8;
-        readonly PageTitle title = new PageTitle("Jeux", "Le HDR s'active au lancement d'un jeu compatible et revient comme avant à sa fermeture.");
-        readonly LabeledToggle master = new LabeledToggle("HDR auto");
-        readonly Segmented filter = new Segmented("Tous (00)", "HDR auto (00)", "À vérifier (00)");
-        readonly Pill add = new Pill("Ajouter un jeu", Glyph.Add) { Dashed = true };
+        // mises en page de la grille : confortable -> de plus en plus compacte
+        static readonly int[] TileMinW = { 220, 190, 165, 145 }, TileH = { 56, 50, 46, 42 }, Gap = { 8, 6, 6, 5 };
+        readonly PageTitle title = new PageTitle(L.T("Jeux"), L.T("Le HDR s'active au lancement d'un jeu compatible et revient comme avant à sa fermeture."));
+        readonly LabeledToggle master = new LabeledToggle(L.T("HDR auto"));
+        readonly Segmented filter = new Segmented(L.T("Tous ({0})", 00), L.T("HDR auto ({0})", 00), L.T("À vérifier ({0})", 00));
+        readonly Pill add = new Pill(L.T("Ajouter un jeu"), Glyph.Add) { Dashed = true };
         readonly IconButton rescan = new IconButton(Glyph.Refresh);
         readonly List<GameTile> tiles = new List<GameTile>();
         readonly ContextMenuStrip menu = Menus.Create();
@@ -530,12 +646,12 @@ namespace LnkScreenManager
         public GamesPage(TrayApp app) : base(app)
         {
             Controls.AddRange(new Control[] { title, master, filter, add, rescan });
-            master.Tg.Toggled += (s, e) => { Settings.AutoHdrGames = master.Tg.Checked; app.ApplyGameSettings(); app.SetStatus(master.Tg.Checked ? "HDR auto activé pour les jeux." : "HDR auto désactivé.", false); };
+            master.Tg.Toggled += (s, e) => { Settings.AutoHdrGames = master.Tg.Checked; app.ApplyGameSettings(); app.SetStatus(L.T(master.Tg.Checked ? "HDR auto activé pour les jeux." : "HDR auto désactivé."), false); };
             filter.SelectedChanged += (s, e) => Relayout();
             add.Click += (s, e) => AddGame();
-            rescan.Click += (s, e) => { app.RescanGames(); app.SetStatus("Jeux actualisés" + (Settings.WikiLookup ? ", recherche des infos HDR…" : "."), false); };
-            tips.SetToolTip(rescan, "Rechercher de nouveaux jeux");
-            menu.Closed += (s, e) => BeginInvoke((Action)(() => Menus.Clear(menu)));
+            rescan.Click += (s, e) => { app.RescanGames(); app.SetStatus(L.T(Settings.WikiLookup ? "Jeux actualisés, recherche des infos HDR…" : "Jeux actualisés."), false); };
+            tips.SetToolTip(rescan, L.T("Rechercher de nouveaux jeux"));
+            menu.Closed += (s, e) => { if (IsHandleCreated) BeginInvoke((Action)(() => Menus.Clear(menu))); };
         }
 
         protected override void Dispose(bool disposing) { if (disposing) { menu.Dispose(); tips.Dispose(); } base.Dispose(disposing); }
@@ -561,41 +677,44 @@ namespace LnkScreenManager
                     tips.SetToolTip(tile, g.Name + (g.Folder != null ? "\n" + g.Folder : g.Exe != null ? "\n" + g.Exe : ""));
                     tiles.Add(tile); Controls.Add(tile);
                 }
-                filter.SetLabel(0, "Tous (" + all.Count + ")");
-                filter.SetLabel(1, "HDR auto (" + all.Count(x => x.AutoHdr) + ")");
-                filter.SetLabel(2, "À vérifier (" + all.Count(ToCheck) + ")");
+                filter.SetLabel(0, L.T("Tous ({0})", all.Count));
+                filter.SetLabel(1, L.T("HDR auto ({0})", all.Count(x => x.AutoHdr)));
+                filter.SetLabel(2, L.T("À vérifier ({0})", all.Count(ToCheck)));
             }
             Relayout();
         }
 
-        IEnumerable<GameTile> Filtered()
+        List<GameTile> Filtered()
         {
-            if (filter.Selected == 1) return tiles.Where(t => t.G.AutoHdr);
-            if (filter.Selected == 2) return tiles.Where(t => ToCheck(t.G));
+            if (filter.Selected == 1) return tiles.Where(t => t.G.AutoHdr).ToList();
+            if (filter.Selected == 2) return tiles.Where(t => ToCheck(t.G)).ToList();
             return tiles;
         }
 
-        protected override int Arrange(int width, int height, bool apply)
+        protected override int Arrange(int width, int height, bool apply) { return Fit(width, height, apply, TileH.Length, Do); }
+
+        int Do(int width, int mode, bool apply)
         {
             int w; int x = Content(width, 4000, out w);
-            int y = Theme.D(20);
+            int y = Theme.D(mode == 0 ? 20 : 12);
             Place(title, x, y, w - master.Width - Theme.D(16), title.Height, apply);
             Place(master, x + w - master.Width, y + Theme.D(4), master.Width, master.Height, apply);
-            y += title.Height + Theme.D(10);
+            y += title.Height + Theme.D(mode == 0 ? 10 : 6);
             Place(filter, x, y, filter.Width, filter.Height, apply);
             Place(rescan, x + w - rescan.Width, y, rescan.Width, rescan.Height, apply);
             Place(add, x + w - rescan.Width - Theme.D(8) - add.Width, y, add.Width, add.Height, apply);
-            y += filter.Height + Theme.D(16);
+            y += filter.Height + Theme.D(mode == 0 ? 16 : 10);
 
-            var vis = Filtered().ToList();
-            int n = apply ? vis.Count : tiles.Count;
-            int gap = Theme.D(Gap), th = Theme.D(TileH);
-            int cols = Math.Max(1, Math.Min(Math.Max(1, (w + gap) / (Theme.D(TileMinW) + gap)), Math.Max(n, 1)));
+            var vis = Filtered();
+            int n = Sizing ? tiles.Count : vis.Count;
+            int gap = Theme.D(Gap[mode]), th = Theme.D(TileH[mode]);
+            int cols = Math.Max(1, Math.Min(Math.Max(1, (w + gap) / (Theme.D(TileMinW[mode]) + gap)), Math.Max(n, 1)));
             int colW = (w - (cols - 1) * gap) / cols;
             int rows = (n + cols - 1) / cols;
             if (apply)
             {
-                foreach (var t in tiles) t.Visible = false;
+                var shown = new HashSet<GameTile>(vis);
+                foreach (var t in tiles) if (!shown.Contains(t)) t.Visible = false;
                 for (int i = 0; i < vis.Count; i++)
                 {
                     var t = vis[i];
@@ -603,39 +722,36 @@ namespace LnkScreenManager
                     t.Visible = true;
                 }
             }
-            if (n == 0 && apply) { }
-            y += Math.Max(0, rows * (th + gap) - gap) + Theme.D(22);
+            y += Math.Max(0, rows * (th + gap) - gap) + Theme.D(mode == 0 ? 22 : 12);
             return y;
         }
-
-        public override void OnThemeChanged() { base.OnThemeChanged(); Invalidate(true); }
 
         void ShowGameMenu(GameTile tile, Point pt)
         {
             var g = tile.G;
             Menus.Clear(menu);
             menu.Items.Add(Menus.Header(g.Name));
-            menu.Items.Add(Menus.Item("Raccourci « Jouer en HDR » sur le bureau", (s, e) => app.MakePlayShortcut(g)));
+            menu.Items.Add(Menus.Item(L.T("Raccourci « Jouer en HDR » sur le bureau"), (s, e) => app.MakePlayShortcut(g)));
             string dir = g.Folder ?? (g.Exe != null ? Path.GetDirectoryName(g.Exe) : null);
-            if (dir != null) menu.Items.Add(Menus.Item("Ouvrir le dossier du jeu", (s, e) => { try { Process.Start("explorer.exe", "\"" + dir + "\""); } catch { } }));
+            if (dir != null) menu.Items.Add(Menus.Item(L.T("Ouvrir le dossier du jeu"), (s, e) => { try { Process.Start("explorer.exe", "\"" + dir + "\""); } catch { } }));
             if (g.User >= 0 && g.Wiki != null)
-                menu.Items.Add(Menus.Item("Suivre PCGamingWiki (" + g.WikiLabel + ")", (s, e) => { g.User = -1; Games.Save(); app.GamesChanged(); }));
+                menu.Items.Add(Menus.Item(L.T("Suivre PCGamingWiki ({0})", g.WikiLabel), (s, e) => { g.User = -1; Games.Save(); app.GamesChanged(); }));
             if (g.Manual)
             {
                 menu.Items.Add(new ToolStripSeparator());
-                menu.Items.Add(Menus.Danger("Retirer de la liste", (s, e) => { Games.Remove(g); app.GamesChanged(); }));
+                menu.Items.Add(Menus.Danger(L.T("Retirer de la liste"), (s, e) => { Games.Remove(g); app.GamesChanged(); }));
             }
             menu.Show(tile, pt);
         }
 
         void AddGame()
         {
-            using (var d = new OpenFileDialog { Title = "Choisir l'exécutable du jeu", Filter = "Programmes (*.exe)|*.exe" })
+            using (var d = new OpenFileDialog { Title = L.T("Choisir l'exécutable du jeu"), Filter = L.T("Programmes (*.exe)|*.exe") })
             {
                 if (d.ShowDialog(FindForm()) != DialogResult.OK) return;
                 var g = Games.AddManual(d.FileName);
                 app.GamesChanged();
-                app.SetStatus("« " + g.Name + " » ajouté en HDR auto.", false);
+                app.SetStatus(L.T("« {0} » ajouté en HDR auto.", g.Name), false);
             }
         }
     }
@@ -643,54 +759,63 @@ namespace LnkScreenManager
     // ------------------------------------------------------------------ Page Reglages
     class SettingsPage : PageBase
     {
-        readonly PageTitle title = new PageTitle("Réglages", null);
+        const string WikiUrl = "https://www.pcgamingwiki.com";
+        readonly PageTitle title = new PageTitle(L.T("Réglages"), null);
         readonly List<Tuple<SectionHeader, List<OptionRow>>> left = new List<Tuple<SectionHeader, List<OptionRow>>>(), right = new List<Tuple<SectionHeader, List<OptionRow>>>();
-        readonly Segmented segTheme = new Segmented("Système", "Sombre", "Clair");
+        readonly Segmented segTheme = new Segmented(L.T("Système"), L.T("Sombre"), L.T("Clair"));
         readonly Toggle tgTray = new Toggle(), tgBoot = new Toggle(), tgNotif = new Toggle(), tgMap = new Toggle(), tgAuto = new Toggle(), tgWiki = new Toggle();
-        readonly Pill pScreen = new Pill("Écran du jeu");
+        readonly Pill pScreen = new Pill(L.T("Écran du jeu")), pLang = new Pill(L.T("Automatique"));
         readonly ContextMenuStrip menu = Menus.Create();
 
         public SettingsPage(TrayApp app) : base(app)
         {
             Controls.Add(title);
-            Group(left, "Apparence", Row("Thème", "Système = comme Windows", segTheme));
-            Group(left, "Fenêtre et démarrage",
-                Row("Réduire près de l'heure", "Le bouton X garde l'appli près de l'horloge", tgTray),
-                Row("Lancer avec Windows", "Démarre discrètement près de l'horloge", tgBoot),
-                Row("Notifications", "Bulle lors d'un changement fait hors fenêtre", tgNotif),
-                Row("Mini-carte des écrans", "Affiche la disposition sur la page Écrans", tgMap));
-            Group(right, "HDR des jeux",
-                Row("HDR auto pour les jeux", "Au lancement d'un jeu compatible", tgAuto),
-                Row("Écran à passer en HDR", null, pScreen),
-                Row("Infos HDR en ligne", "PCGamingWiki · seul l'identifiant Steam est envoyé", tgWiki));
-            var pAll = new Pill("Allumer"); var pHdr = new Pill("Couper"); var pData = new Pill("Ouvrir"); var pQuit = new Pill("Quitter");
-            Group(right, "Actions",
-                Row("Allumer tous les écrans", null, pAll),
-                Row("Couper le HDR partout", null, pHdr),
-                Row("Dossier des données", "Profils, noms, réglages", pData));
-            Group(right, "À propos", Row(Brand.Name + " " + Brand.Version, Brand.By + " · Windows 10 / 11", pQuit));
+            var pAll = new Pill(L.T("Allumer")); var pHdr = new Pill(L.T("Couper")); var pData = new Pill(L.T("Ouvrir"));
+            var pWiki = new Pill(L.T("Ouvrir")); var pQuit = new Pill(L.T("Quitter"));
+
+            Group(left, L.T("Apparence"),
+                Row(L.T("Thème"), L.T("Système = comme Windows"), segTheme),
+                Row(L.T("Langue"), L.T("Automatique = langue de Windows"), pLang));
+            Group(left, L.T("Fenêtre et démarrage"),
+                Row(L.T("Réduire près de l'heure"), L.T("Le bouton X garde l'appli près de l'horloge"), tgTray),
+                Row(L.T("Lancer avec Windows"), L.T("Démarre discrètement près de l'horloge"), tgBoot),
+                Row(L.T("Notifications"), L.T("Bulle lors d'un changement fait hors fenêtre"), tgNotif),
+                Row(L.T("Mini-carte des écrans"), L.T("Affiche la disposition sur la page Écrans"), tgMap));
+            Group(left, L.T("À propos"),
+                Row(Brand.Name + " " + Brand.Version, L.T("Gratuit et open source · Windows 10 / 11"), pQuit));
+            Group(right, L.T("HDR des jeux"),
+                Row(L.T("HDR auto pour les jeux"), L.T("Au lancement d'un jeu compatible"), tgAuto),
+                Row(L.T("Écran à passer en HDR"), null, pScreen),
+                Row(L.T("Infos HDR en ligne"), L.T("PCGamingWiki · seul l'identifiant Steam est envoyé"), tgWiki),
+                Row(L.T("Source des infos HDR"), "PCGamingWiki.com · CC BY-NC-SA 3.0", pWiki));
+            Group(right, L.T("Actions"),
+                Row(L.T("Allumer tous les écrans"), null, pAll),
+                Row(L.T("Couper le HDR partout"), null, pHdr),
+                Row(L.T("Dossier des données"), L.T("Profils, noms, réglages"), pData));
 
             segTheme.SelectedChanged += (s, e) =>
             {
                 Settings.ThemeMode = segTheme.Selected == 1 ? "dark" : segTheme.Selected == 2 ? "light" : "system";
                 Theme.ApplyMode(Settings.ThemeMode);
             };
+            pLang.Click += (s, e) => ShowLanguageMenu();
             tgTray.Toggled += (s, e) => Settings.TrayOnClose = tgTray.Checked;
             tgBoot.Toggled += (s, e) =>
             {
-                try { Startup.Enabled = tgBoot.Checked; app.SetStatus(tgBoot.Checked ? "Lancement avec Windows activé." : "Lancement avec Windows désactivé.", false); }
-                catch (Exception ex) { app.SetStatus("Impossible : " + ex.Message, true); tgBoot.Checked = Startup.Enabled; }
+                try { Startup.Enabled = tgBoot.Checked; app.SetStatus(L.T(tgBoot.Checked ? "Lancement avec Windows activé." : "Lancement avec Windows désactivé."), false); }
+                catch (Exception ex) { app.SetStatus(L.T("Impossible : {0}", ex.Message), true); tgBoot.Checked = Startup.Enabled; }
             };
             tgNotif.Toggled += (s, e) => Settings.NotifyChanges = tgNotif.Checked;
-            tgMap.Toggled += (s, e) => { Settings.ShowMap = tgMap.Checked; app.SetStatus(tgMap.Checked ? "Mini-carte affichée." : "Mini-carte masquée.", false); };
-            tgAuto.Toggled += (s, e) => { Settings.AutoHdrGames = tgAuto.Checked; app.ApplyGameSettings(); app.SetStatus(tgAuto.Checked ? "HDR auto activé pour les jeux." : "HDR auto désactivé.", false); };
+            tgMap.Toggled += (s, e) => { Settings.ShowMap = tgMap.Checked; app.SetStatus(L.T(tgMap.Checked ? "Mini-carte affichée." : "Mini-carte masquée."), false); };
+            tgAuto.Toggled += (s, e) => { Settings.AutoHdrGames = tgAuto.Checked; app.ApplyGameSettings(); app.SetStatus(L.T(tgAuto.Checked ? "HDR auto activé pour les jeux." : "HDR auto désactivé."), false); };
             tgWiki.Toggled += (s, e) => { Settings.WikiLookup = tgWiki.Checked; if (tgWiki.Checked) app.LookupGames(); };
             pScreen.Click += (s, e) => ShowScreenMenu();
             pAll.Click += (s, e) => app.AllOn();
             pHdr.Click += (s, e) => app.AllHdrOff();
             pData.Click += (s, e) => { try { Process.Start("explorer.exe", "\"" + AppData.Dir + "\""); } catch { } };
+            pWiki.Click += (s, e) => { try { Process.Start(WikiUrl); } catch { } };
             pQuit.Click += (s, e) => app.Exit();
-            menu.Closed += (s, e) => BeginInvoke((Action)(() => Menus.Clear(menu)));
+            menu.Closed += (s, e) => { if (IsHandleCreated) BeginInvoke((Action)(() => Menus.Clear(menu))); };
         }
 
         protected override void Dispose(bool disposing) { if (disposing) menu.Dispose(); base.Dispose(disposing); }
@@ -702,46 +827,54 @@ namespace LnkScreenManager
             col.Add(Tuple.Create(h, rows.ToList()));
         }
 
+        static void SetPill(Pill p, string text) { if (p.Text == text) return; p.Text = text; p.Fit(); if (p.Parent != null) p.Parent.PerformLayout(); }
+
         public override void Render()
         {
             string mode = Settings.ThemeMode;
             segTheme.Selected = mode == "dark" ? 1 : mode == "light" ? 2 : 0;
             tgTray.Checked = Settings.TrayOnClose; tgBoot.Checked = Startup.Enabled; tgNotif.Checked = Settings.NotifyChanges;
             tgMap.Checked = Settings.ShowMap; tgAuto.Checked = Settings.AutoHdrGames; tgWiki.Checked = Settings.WikiLookup;
-            string t = "Écran du jeu";
+            string t = L.T("Écran du jeu");
             if (!string.IsNullOrEmpty(Settings.HdrTarget))
             {
                 var m = app.Mons.FirstOrDefault(x => x.DevicePath == Settings.HdrTarget);
-                t = m != null ? m.Name : "Écran débranché";
+                t = m != null ? m.Name : L.T("Écran débranché");
             }
-            if (pScreen.Text != t) { pScreen.Text = t; pScreen.Fit(); if (pScreen.Parent != null) pScreen.Parent.PerformLayout(); }
+            SetPill(pScreen, t);
+            string lang = Settings.Language;
+            int li = Array.IndexOf(L.Codes, lang);
+            SetPill(pLang, li >= 0 ? L.Native[li] : L.T("Automatique"));
             Relayout();
         }
 
-        protected override int Arrange(int width, int height, bool apply)
+        protected override int Arrange(int width, int height, bool apply) { return Fit(width, height, apply, 2, Do); }
+
+        int Do(int width, int mode, bool apply)
         {
             int w; int x = Content(width, 1000, out w);
-            int y = Theme.D(20);
+            int y = Theme.D(mode == 0 ? 20 : 12);
             Place(title, x, y, w, title.Height, apply);
-            y += title.Height + Theme.D(10);
+            y += title.Height + Theme.D(mode == 0 ? 10 : 4);
             int gap = Theme.D(20);
             if (w >= Theme.D(700))
             {
                 int cw = (w - gap) / 2;
-                int yl = Column(left, x, y, cw, apply), yr = Column(right, x + cw + gap, y, cw, apply);
-                return Math.Max(yl, yr) + Theme.D(10);
+                int yl = Column(left, x, y, cw, mode, apply), yr = Column(right, x + cw + gap, y, cw, mode, apply);
+                return Math.Max(yl, yr) + Theme.D(6);
             }
-            y = Column(left, x, y, w, apply);
-            return Column(right, x, y, w, apply) + Theme.D(10);
+            y = Column(left, x, y, w, mode, apply);
+            return Column(right, x, y, w, mode, apply) + Theme.D(6);
         }
 
-        int Column(List<Tuple<SectionHeader, List<OptionRow>>> groups, int x, int y, int w, bool apply)
+        int Column(List<Tuple<SectionHeader, List<OptionRow>>> groups, int x, int y, int w, int mode, bool apply)
         {
+            bool cozy = mode == 0;
             foreach (var gr in groups)
             {
-                Place(gr.Item1, x, y, w, gr.Item1.Height, apply); y += gr.Item1.Height + Theme.D(4);
-                foreach (var r in gr.Item2) { Place(r, x, y, w, r.Height, apply); y += r.Height + Theme.D(6); }
-                y += Theme.D(14);
+                Place(gr.Item1, x, y, w, gr.Item1.Height, apply); y += gr.Item1.Height + Theme.D(cozy ? 4 : 2);
+                foreach (var r in gr.Item2) { int h = cozy ? r.Comfort : r.Compact; Place(r, x, y, w, h, apply); y += h + Theme.D(cozy ? 6 : 4); }
+                y += Theme.D(cozy ? 14 : 6);
             }
             return y;
         }
@@ -751,13 +884,12 @@ namespace LnkScreenManager
             base.OnThemeChanged();
             foreach (var gr in left.Concat(right)) foreach (var r in gr.Item2) r.OnThemeChanged();
             Render();
-            Invalidate(true);
         }
 
         void ShowScreenMenu()
         {
             Menus.Clear(menu);
-            var it = Menus.Item("Écran où s'affiche le jeu", (s, e) => { Settings.HdrTarget = ""; Render(); });
+            var it = Menus.Item(L.T("Écran où s'affiche le jeu"), (s, e) => { Settings.HdrTarget = ""; Render(); });
             it.Checked = string.IsNullOrEmpty(Settings.HdrTarget);
             menu.Items.Add(it);
             menu.Items.Add(new ToolStripSeparator());
@@ -769,6 +901,31 @@ namespace LnkScreenManager
                 menu.Items.Add(i);
             }
             menu.Show(pScreen, new Point(0, pScreen.Height + Theme.D(2)));
+        }
+
+        void ShowLanguageMenu()
+        {
+            Menus.Clear(menu);
+            var auto = Menus.Item(L.T("Automatique"), (s, e) => SetLanguage("auto"));
+            auto.Checked = Array.IndexOf(L.Codes, Settings.Language) < 0;
+            menu.Items.Add(auto);
+            menu.Items.Add(new ToolStripSeparator());
+            for (int i = 0; i < L.Codes.Length; i++)
+            {
+                string code = L.Codes[i];
+                var it = Menus.Item(L.Native[i], (s, e) => SetLanguage(code));
+                it.Checked = Settings.Language == code;
+                menu.Items.Add(it);
+            }
+            menu.Show(pLang, new Point(0, pLang.Height + Theme.D(2)));
+        }
+
+        void SetLanguage(string code)
+        {
+            Settings.Language = code;
+            int before = L.Index;
+            L.Apply(code); // si la langue change, la fenetre se reconstruit dans la nouvelle langue
+            if (L.Index == before) Render();
         }
     }
 }

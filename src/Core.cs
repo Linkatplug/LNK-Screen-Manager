@@ -1,4 +1,4 @@
-// LNK Screen Manager - coeur : ecrans (API Windows CCD), HDR, disposition memorisee, profils.
+﻿// LNK Screen Manager - coeur : ecrans (API Windows CCD), HDR, disposition memorisee, profils.
 // By LNK Co (c) 2026
 using System;
 using System.Collections.Generic;
@@ -115,8 +115,8 @@ namespace LnkScreenManager
         public bool HasModes; public MODE_INFO SrcMode, TgtMode; public PATH_INFO Path;
         public string Label { get {
             string s = Name;
-            if (Active) s += "   " + Width + "x" + Height + " @ (" + X + "," + Y + ")" + (Primary ? "  [principal]" : "");
-            else s += "   (éteint)";
+            if (Active) s += "   " + Width + "x" + Height + " @ (" + X + "," + Y + ")" + (Primary ? "  [" + L.T("principal") + "]" : "");
+            else s += "   (" + L.T("Éteint") + ")";
             return s; } }
     }
 
@@ -140,7 +140,7 @@ namespace LnkScreenManager
                 if (Native.DisplayConfigGetDeviceInfo(ref tn) != 0) continue;
                 if (string.IsNullOrEmpty(tn.monitorDevicePath)) continue;
                 var m = new Monitor {
-                    Name = string.IsNullOrEmpty(tn.monitorFriendlyDeviceName) ? "Écran inconnu" : tn.monitorFriendlyDeviceName,
+                    Name = string.IsNullOrEmpty(tn.monitorFriendlyDeviceName) ? L.T("Écran inconnu") : tn.monitorFriendlyDeviceName,
                     DevicePath = tn.monitorDevicePath, AdapterId = p.targetInfo.adapterId, TargetId = p.targetInfo.id,
                     Active = (p.flags & Native.PATH_ACTIVE) != 0 };
                 if (m.Active)
@@ -207,7 +207,7 @@ namespace LnkScreenManager
             int err = -1;
             if (hdr2Api) { s.header.type = 16; err = Native.DisplayConfigSetDeviceInfo(ref s); } // SET_HDR_STATE
             if (err != 0) { s.header.type = 10; err = Native.DisplayConfigSetDeviceInfo(ref s); } // SET_ADVANCED_COLOR_STATE
-            if (err != 0) throw new Exception("Impossible de changer le HDR de " + m.Name + " (erreur " + err + ")");
+            if (err != 0) throw new Exception(L.T("Impossible de changer le HDR de {0} (erreur {1})", m.Name, err));
         }
 
         static string Key(LUID a, uint id) { return a.LowPart + ":" + a.HighPart + ":" + id; }
@@ -217,15 +217,15 @@ namespace LnkScreenManager
         {
             if (SetActive(devicePathsOn, true) == 0) return;
             int err = SetActive(devicePathsOn, false);
-            if (err != 0) throw new Exception("Windows a refusé la configuration (erreur " + err + ").");
+            if (err != 0) throw new Exception(L.T("Windows a refusé la configuration (erreur {0}).", err));
         }
 
         static int SetActive(ICollection<string> devicePathsOn, bool useSaved)
         {
-            if (devicePathsOn.Count == 0) throw new Exception("Il faut garder au moins un écran allumé.");
+            if (devicePathsOn.Count == 0) throw new Exception(L.T("Il faut garder au moins un écran allumé."));
             var mons = List();
             var wanted = new HashSet<string>(mons.Where(m => devicePathsOn.Contains(m.DevicePath)).Select(m => Key(m.AdapterId, m.TargetId)));
-            if (wanted.Count == 0) throw new Exception("Aucun des écrans demandés n'est branché.");
+            if (wanted.Count == 0) throw new Exception(L.T("Aucun des écrans demandés n'est branché."));
 
             PATH_INFO[] all; MODE_INFO[] modes;
             Native.Query(Native.QDC_ALL_PATHS, out all, out modes);
@@ -314,7 +314,7 @@ namespace LnkScreenManager
         public static void AllOn()
         {
             int err = Native.SetDisplayConfig(0, null, 0, null, Native.SDC_APPLY | Native.SDC_TOPOLOGY_EXTEND);
-            if (err != 0) throw new Exception("Impossible de tout rallumer (erreur " + err + ").");
+            if (err != 0) throw new Exception(L.T("Impossible de tout rallumer (erreur {0}).", err));
         }
 
         public static void WaitFor(Func<List<Monitor>, bool> cond, int ms = 6000)

@@ -17,7 +17,7 @@ namespace LnkScreenManager
     {
         public const string Name = "LNK Screen Manager";
         public const string By = "By LNK Co © 2026";
-        public const string Version = "1.3";
+        public const string Version = "1.4";
     }
 
     // ------------------------------------------------------------------ Theme
@@ -25,6 +25,14 @@ namespace LnkScreenManager
     {
         public static float S = 1f;
         public static int D(float px) { return (int)Math.Round(px * S); }
+
+        /// Change l'echelle (100 % = 1). Les polices sont recreees a la nouvelle taille.
+        public static void SetScale(float s)
+        {
+            if (s < 0.75f) s = 0.75f;
+            if (Math.Abs(s - S) < 0.001f) return;
+            S = s; fonts.Clear();
+        }
 
         public static bool Dark = true;
         public static Color Bg, Side, Card, CardHover, Border, Text, Dim, Faint, Accent, AccentHover, Danger, Track;
@@ -93,8 +101,14 @@ namespace LnkScreenManager
         public static Font Face(string family, float pt)
         {
             string k = family + "|" + pt; Font f;
-            if (!fonts.TryGetValue(k, out f)) { f = new Font(family, pt, FontStyle.Regular, GraphicsUnit.Point); fonts[k] = f; }
+            if (!fonts.TryGetValue(k, out f)) { f = new Font(family, pt * 96f / 72f * S, FontStyle.Regular, GraphicsUnit.Pixel); fonts[k] = f; }
             return f;
+        }
+
+        /// Police a une echelle donnee (non mise en cache : a liberer par l'appelant).
+        public static Font FontAt(float pt, bool semibold, float scale)
+        {
+            return new Font(semibold ? "Segoe UI Semibold" : "Segoe UI", pt * 96f / 72f * scale, FontStyle.Regular, GraphicsUnit.Pixel);
         }
 
         public static GraphicsPath Round(RectangleF r, float rad)
@@ -173,7 +187,36 @@ namespace LnkScreenManager
     static class Win
     {
         [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr h, int attr, ref int val, int size);
-        [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+        [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
+        [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+        [DllImport("shcore.dll")] static extern int SetProcessDpiAwareness(int value);
+        [DllImport("shcore.dll")] static extern int GetDpiForMonitor(IntPtr hmon, int type, out uint x, out uint y);
+        [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr hwnd);
+        [DllImport("user32.dll")] static extern IntPtr MonitorFromPoint(Point pt, uint flags);
+
+        /// Net sur chaque ecran, meme a des echelles differentes (Per-Monitor v2, sinon v1, sinon systeme).
+        public static void EnableDpiAwareness()
+        {
+            try { if (SetProcessDpiAwarenessContext((IntPtr)(-4))) return; } catch { }
+            try { if (SetProcessDpiAwareness(2) == 0) return; } catch { }
+            try { SetProcessDPIAware(); } catch { }
+        }
+
+        public static int SystemDpi { get { using (var g = Graphics.FromHwnd(IntPtr.Zero)) return (int)g.DpiX; } }
+
+        public static int DpiAt(Point p)
+        {
+            try { uint x, y; if (GetDpiForMonitor(MonitorFromPoint(p, 2), 0, out x, out y) == 0 && x > 0) return (int)x; } catch { }
+            return SystemDpi;
+        }
+
+        public static int DpiOf(Screen s) { var b = s.Bounds; return DpiAt(new Point(b.X + b.Width / 2, b.Y + b.Height / 2)); }
+
+        public static int DpiOfWindow(IntPtr h)
+        {
+            try { uint d = GetDpiForWindow(h); if (d > 0) return (int)d; } catch { }
+            return SystemDpi;
+        }
         [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
         [DllImport("kernel32.dll")] static extern bool SetProcessWorkingSetSize(IntPtr p, IntPtr min, IntPtr max);
 
@@ -456,6 +499,11 @@ namespace LnkScreenManager
         public Segmented(params string[] items)
         {
             this.items = items; Cursor = Cursors.Hand; Height = Theme.D(34);
+            Recalc();
+        }
+
+        void Recalc()
+        {
             int w = Theme.D(8);
             foreach (var s in items) w += Theme.Measure(s, Theme.F(9.5f, true)).Width + Theme.D(28);
             Width = w;
@@ -467,7 +515,7 @@ namespace LnkScreenManager
             get { return selected; }
             set { if (value == selected) return; selected = value; Glide(); }
         }
-        public void SetLabel(int i, string text) { items[i] = text; Invalidate(); }
+        public void SetLabel(int i, string text) { if (items[i] == text) return; items[i] = text; Recalc(); Invalidate(); if (Parent != null) Parent.PerformLayout(); }
 
         void Glide()
         {
@@ -528,7 +576,7 @@ namespace LnkScreenManager
             Theme.Draw(g, Text, f, new Rectangle(Theme.D(2), 0, Width, Height), Theme.Faint, TextFormatFlags.VerticalCenter);
             if (!Columns) return;
             int tw = Theme.D(42);
-            Theme.Draw(g, "ÉCRAN", f, new Rectangle(Width - Theme.D(MonitorCard.ColOn) - Theme.D(10), 0, tw + Theme.D(20), Height), Theme.Faint, Theme.Center);
+            Theme.Draw(g, L.T("ÉCRAN"), f, new Rectangle(Width - Theme.D(MonitorCard.ColOn) - Theme.D(10), 0, tw + Theme.D(20), Height), Theme.Faint, Theme.Center);
             Theme.Draw(g, "HDR", f, new Rectangle(Width - Theme.D(MonitorCard.ColHdr) - Theme.D(10), 0, tw + Theme.D(20), Height), Theme.Faint, Theme.Center);
         }
     }
@@ -626,13 +674,13 @@ namespace LnkScreenManager
             var ns = Theme.Measure(M.Name, nf);
             int penW = Theme.D(22);
             int nameW = Math.Max(0, Math.Min(ns.Width, maxRight - x - penW));
-            int ny = Theme.D(11);
+            int ny = Height / 2 - Theme.D(21);
             Theme.Draw(g, M.Name, nf, new Rectangle(x, ny, nameW + 2, ns.Height + 2), M.Active ? Theme.Text : Theme.Dim, TextFormatFlags.EndEllipsis);
             var penRect = new Rectangle(x + nameW + Theme.D(4), ny, Theme.D(18), ns.Height);
             nameZone = Rectangle.Union(new Rectangle(x, ny, nameW, ns.Height), penRect);
             if (Hover > 0.05f) Theme.Draw(g, Glyph.Edit, Theme.IconF(9f), penRect, Color.FromArgb((int)(255 * Hover), Theme.Faint), Theme.Center);
 
-            Theme.Draw(g, detail, Theme.F(9.5f, false), new Rectangle(x, Theme.D(35), maxRight - x, Theme.D(20)), Theme.Dim, TextFormatFlags.EndEllipsis);
+            Theme.Draw(g, detail, Theme.F(9.5f, false), new Rectangle(x, Height / 2 + Theme.D(3), maxRight - x, Theme.D(20)), Theme.Dim, TextFormatFlags.EndEllipsis);
 
             if (M.Active && !M.HdrSupported)
                 Theme.Draw(g, "—", Theme.F(10f, false), new Rectangle(Width - Theme.D(ColHdr), 0, TgHdr.Width, Height), Theme.Faint, Theme.Center);
@@ -837,8 +885,8 @@ namespace LnkScreenManager
                 if (owner == null) { f.StartPosition = FormStartPosition.CenterScreen; f.TopMost = true; f.ShowInTaskbar = true; }
                 var l = new Label { Text = text, Location = new Point(Theme.D(22), Theme.D(20)), AutoSize = true, ForeColor = Theme.Dim, BackColor = Theme.Bg };
                 var t = new TextBox { Text = def ?? "", Location = new Point(Theme.D(22), Theme.D(52)), Width = Theme.D(396), BackColor = Theme.Card, ForeColor = Theme.Text, BorderStyle = BorderStyle.FixedSingle, Font = Theme.F(11f, false) };
-                var ok = new Pill("Enregistrer") { Primary = true };
-                var cancel = new Pill("Annuler");
+                var ok = new Pill(L.T("Enregistrer")) { Primary = true };
+                var cancel = new Pill(L.T("Annuler"));
                 ok.Location = new Point(f.ClientSize.Width - Theme.D(22) - ok.Width, Theme.D(114));
                 cancel.Location = new Point(ok.Left - Theme.D(8) - cancel.Width, Theme.D(114));
                 ok.Click += (s, e) => { f.DialogResult = DialogResult.OK; f.Close(); };
@@ -857,7 +905,7 @@ namespace LnkScreenManager
                 if (owner == null) { f.StartPosition = FormStartPosition.CenterScreen; f.TopMost = true; }
                 var l = new Label { Text = text, Location = new Point(Theme.D(22), Theme.D(24)), Size = new Size(Theme.D(376), Theme.D(50)), ForeColor = Theme.Text, BackColor = Theme.Bg };
                 var ok = new Pill(yes) { Primary = true };
-                var cancel = new Pill("Annuler");
+                var cancel = new Pill(L.T("Annuler"));
                 ok.Location = new Point(f.ClientSize.Width - Theme.D(22) - ok.Width, Theme.D(86));
                 cancel.Location = new Point(ok.Left - Theme.D(8) - cancel.Width, Theme.D(86));
                 ok.Click += (s, e) => { f.DialogResult = DialogResult.OK; f.Close(); };
@@ -871,28 +919,31 @@ namespace LnkScreenManager
     /// Grand numero affiche au centre d'un ecran ("Identifier").
     class IdentifyForm : Form
     {
-        readonly int number; readonly string name;
+        readonly int number; readonly string name; readonly float k;
+        readonly Font big, small;
         readonly Timer timer = new Timer { Interval = 2500 };
 
-        public IdentifyForm(Rectangle screen, int number, string name)
+        public IdentifyForm(Rectangle screen, int number, string name, float scale)
         {
-            this.number = number; this.name = name;
+            this.number = number; this.name = name; k = scale;
+            big = Theme.FontAt(64f, true, k); small = Theme.FontAt(11f, false, k);
             FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; TopMost = true; StartPosition = FormStartPosition.Manual;
             BackColor = Theme.Bg; AutoScaleMode = AutoScaleMode.None; DoubleBuffered = true;
-            var sz = new Size(Theme.D(260), Theme.D(190));
+            var sz = new Size((int)(260 * k), (int)(190 * k));
             Bounds = new Rectangle(screen.X + (screen.Width - sz.Width) / 2, screen.Y + (screen.Height - sz.Height) / 2, sz.Width, sz.Height);
             timer.Tick += (s, e) => Close(); timer.Start();
             Click += (s, e) => Close();
         }
         protected override bool ShowWithoutActivation { get { return true; } }
         protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); Win.Style(Handle); }
-        protected override void OnFormClosed(FormClosedEventArgs e) { timer.Dispose(); base.OnFormClosed(e); }
+        protected override void OnFormClosed(FormClosedEventArgs e) { timer.Dispose(); big.Dispose(); small.Dispose(); base.OnFormClosed(e); }
         protected override void OnPaint(PaintEventArgs e)
         {
             var g = e.Graphics;
-            using (var pen = new Pen(Theme.Accent, Theme.D(3))) g.DrawRectangle(pen, Theme.D(1), Theme.D(1), Width - Theme.D(3), Height - Theme.D(3));
-            Theme.Draw(g, number.ToString(), Theme.F(64f, true), new Rectangle(0, Theme.D(8), Width, Theme.D(130)), Theme.Text, Theme.Center);
-            Theme.Draw(g, name, Theme.F(11f, false), new Rectangle(Theme.D(10), Theme.D(140), Width - Theme.D(20), Theme.D(32)), Theme.Dim, Theme.Center | TextFormatFlags.EndEllipsis);
+            int b = (int)(3 * k);
+            using (var pen = new Pen(Theme.Accent, b)) g.DrawRectangle(pen, b / 2, b / 2, Width - b, Height - b);
+            Theme.Draw(g, number.ToString(), big, new Rectangle(0, (int)(8 * k), Width, (int)(130 * k)), Theme.Text, Theme.Center);
+            Theme.Draw(g, name, small, new Rectangle((int)(10 * k), (int)(140 * k), Width - (int)(20 * k), (int)(32 * k)), Theme.Dim, Theme.Center | TextFormatFlags.EndEllipsis);
         }
     }
 }
