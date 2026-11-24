@@ -226,6 +226,19 @@ namespace LnkScreenManager
 
         public static void Remove(Game g) { lock (sync) { if (list != null) list.Remove(g); } Save(); }
 
+        /// Tous les processus en cours appartenant a ce jeu.
+        public static List<int> FindAllRunning(Game g, int exclude)
+        {
+            var res = new List<int>();
+            foreach (var p in Process.GetProcesses())
+            {
+                int id = p.Id; p.Dispose();
+                if (id == exclude || id <= 4) continue;
+                if (g.Matches(Proc.PathOf(id))) res.Add(id);
+            }
+            return res;
+        }
+
         /// Processus en cours appartenant a ce jeu (0 si aucun).
         public static int FindRunning(Game g, int exclude)
         {
@@ -343,19 +356,50 @@ namespace LnkScreenManager
     }
 
     // ------------------------------------------------------------------ Surveillance des jeux
+    /// Journal du HDR auto (%APPDATA%\LNK Screen Manager\hdr-auto.log), ecrit seulement lors d'un evenement.
+    static class HdrLog
+    {
+        static readonly object sync = new object();
+        public static void Write(string msg)
+        {
+            try
+            {
+                lock (sync)
+                {
+                    string f = AppData.File("hdr-auto.log");
+                    var fi = new FileInfo(f);
+                    if (fi.Exists && fi.Length > 200 * 1024) // garde la fin du fichier
+                    {
+                        var lines = File.ReadAllLines(f, Encoding.UTF8);
+                        File.WriteAllLines(f, lines.Skip(lines.Length / 2), Encoding.UTF8);
+                    }
+                    File.AppendAllText(f, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "  " + msg + Environment.NewLine, Encoding.UTF8);
+                }
+            }
+            catch { }
+        }
+    }
+
     class GameWatcher
     {
         delegate void WinEventProc(IntPtr hook, uint ev, IntPtr hwnd, int obj, int child, uint thread, uint time);
+        delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
         [DllImport("user32.dll")] static extern IntPtr SetWinEventHook(uint min, uint max, IntPtr mod, WinEventProc proc, uint pid, uint tid, uint flags);
         [DllImport("user32.dll")] static extern bool UnhookWinEvent(IntPtr h);
         [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out int pid);
         [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool GetMonitorInfo(IntPtr hmon, ref MONITORINFOEX mi);
+        [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindowsProc proc, IntPtr lParam);
+        [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
         [StructLayout(LayoutKind.Sequential)] struct RECT { public int l, t, r, b; }
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
         struct MONITORINFOEX { public int cbSize; public RECT rcMonitor, rcWork; public uint dwFlags; [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string szDevice; }
 
         class Session { public Game G; public int Pid; public string Screen; public bool WeTurnedOn; public Process P; }
+
+        /// Apres la fermeture du jeu : delai pour un lanceur qui demarre le vrai jeu, puis delai max
+        /// pour un processus du jeu sans fenetre (aide en arriere-plan) avant de couper le HDR.
+        const int ExitGraceMs = 4000, HelperGraceMs = 30000;
 
         readonly TrayApp app;
         readonly WinEventProc proc; // garde la reference (sinon le ramasse-miettes la liberera)
@@ -363,6 +407,8 @@ namespace LnkScreenManager
         readonly HashSet<int> ignored = new HashSet<int>();
         readonly int myPid = Process.GetCurrentProcess().Id;
         IntPtr hook;
+
+        static string StateFile { get { return AppData.File("hdr-sessions.txt"); } }
 
         public GameWatcher(TrayApp app) { this.app = app; proc = OnForeground; }
 
@@ -380,7 +426,7 @@ namespace LnkScreenManager
             string path = Proc.PathOf(pid);
             var g = path == null ? null : Games.All.FirstOrDefault(x => x.AutoHdr && x.Matches(path));
             if (g == null) { if (ignored.Count > 500) ignored.Clear(); ignored.Add(pid); return; }
-            Begin(g, pid, ScreenFor(hwnd));
+            Begin(g, pid, ScreenFor(hwnd), path);
         }
 
         string ScreenFor(IntPtr hwnd)
@@ -393,15 +439,32 @@ namespace LnkScreenManager
             return m == null ? null : m.DevicePath;
         }
 
-        void Begin(Game g, int pid, string screen)
+        static string ScreenName(string path)
+        {
+            var m = Displays.List().FirstOrDefault(x => x.DevicePath == path);
+            return m != null ? m.Name : "?";
+        }
+
+        void Begin(Game g, int pid, string screen, string exe)
         {
             var s = new Session { G = g, Pid = pid, Screen = screen };
-            if (!Follow(s, pid)) return;
+            if (!Follow(s, pid)) { HdrLog.Write("Jeu ignoré (fin du processus impossible à suivre) : " + g.Name + " pid " + pid + " " + exe); return; }
             sessions.Add(s);
             var mon = Displays.List().FirstOrDefault(m => m.DevicePath == screen);
-            if (mon == null || !mon.Active || !mon.HdrSupported) { app.SetStatus(L.T("{0} : l'écran du jeu ne gère pas le HDR.", g.Name), false); return; }
-            if (mon.HdrOn) return; // deja en HDR (par toi ou un autre jeu) : on ne touchera a rien a la fermeture
+            if (mon == null || !mon.Active || !mon.HdrSupported)
+            {
+                HdrLog.Write("Jeu lancé : " + g.Name + " (pid " + pid + ") — écran sans HDR, rien à faire.");
+                app.SetStatus(L.T("{0} : l'écran du jeu ne gère pas le HDR.", g.Name), false);
+                return;
+            }
+            if (mon.HdrOn)
+            {
+                HdrLog.Write("Jeu lancé : " + g.Name + " (pid " + pid + ", " + Path.GetFileName(exe) + ") — HDR déjà actif sur " + mon.Name + ", il ne sera pas coupé à la fermeture.");
+                return;
+            }
             s.WeTurnedOn = true;
+            SaveState();
+            HdrLog.Write("Jeu lancé : " + g.Name + " (pid " + pid + ", " + Path.GetFileName(exe) + ") — HDR activé sur " + mon.Name + ".");
             app.HdrAuto(mon, true, L.T("HDR activé pour {0}.", g.Name));
         }
 
@@ -412,32 +475,127 @@ namespace LnkScreenManager
             {
                 var p = Process.GetProcessById(pid);
                 p.EnableRaisingEvents = true;
-                p.Exited += (o, e) => app.Post(() => OnExit(s));
+                p.Exited += (o, e) => app.Post(() => OnExit(s, p));
                 s.Pid = pid; s.P = p;
+                try { if (p.HasExited) app.Post(() => OnExit(s, p)); } catch { } // termine entre-temps (lecture parfois refusee : sans gravite)
                 return true;
             }
             catch { return false; }
         }
 
-        void OnExit(Session s)
+        void OnExit(Session s, Process p)
         {
-            try { s.P.Dispose(); } catch { }
-            // petite attente : un lanceur peut avoir demarre le vrai jeu juste avant de se fermer
-            var t = new System.Windows.Forms.Timer { Interval = 4000 };
-            t.Tick += (o, e) => { t.Stop(); t.Dispose(); Finish(s); };
+            if (s.P != p) return; // evenement d'un ancien processus deja remplace
+            try { p.Dispose(); } catch { }
+            s.P = null;
+            HdrLog.Write("Processus fermé : " + s.G.Name + " (pid " + s.Pid + ").");
+            After(ExitGraceMs, () => Finish(s, false));
+        }
+
+        void After(int ms, Action a)
+        {
+            var t = new System.Windows.Forms.Timer { Interval = ms };
+            t.Tick += (o, e) => { t.Stop(); t.Dispose(); a(); };
             t.Start();
         }
 
-        void Finish(Session s)
+        /// Fenetres visibles des processus donnes.
+        static HashSet<int> WithWindow(ICollection<int> pids)
         {
-            int other = Games.FindRunning(s.G, s.Pid);
-            if (other > 0 && !sessions.Any(x => x != s && x.Pid == other) && Follow(s, other)) return; // le jeu continue sous un autre exe
+            var res = new HashSet<int>();
+            if (pids.Count == 0) return res;
+            EnumWindows((hwnd, l) =>
+            {
+                if (IsWindowVisible(hwnd)) { int pid; GetWindowThreadProcessId(hwnd, out pid); if (pids.Contains(pid)) res.Add(pid); }
+                return true;
+            }, IntPtr.Zero);
+            return res;
+        }
+
+        void Finish(Session s, bool helperTimeout)
+        {
+            if (!sessions.Contains(s) || s.P != null) return;
+            var others = Games.FindAllRunning(s.G, s.Pid).Where(id => !sessions.Any(x => x != s && x.Pid == id)).ToList();
+            var windowed = WithWindow(others);
+            int next = others.FirstOrDefault(id => windowed.Contains(id));
+            if (next > 0 && Follow(s, next)) { HdrLog.Write("Le jeu continue : " + s.G.Name + " suivi sur le pid " + next + "."); return; }
+            if (others.Count > 0 && !helperTimeout && Follow(s, others[0]))
+            {
+                // processus du jeu sans fenetre (lanceur en cours de demarrage, ou aide en arriere-plan) :
+                // on le suit, mais au plus 30 s s'il n'ouvre pas de fenetre
+                HdrLog.Write("Processus du jeu sans fenêtre (pid " + others[0] + ") : attente de " + (HelperGraceMs / 1000) + " s maximum.");
+                var followed = s.P;
+                After(HelperGraceMs, () =>
+                {
+                    if (!sessions.Contains(s) || s.P != followed || followed == null) return;
+                    if (WithWindow(new[] { s.Pid }).Count > 0) return; // il a ouvert une fenetre : c'est bien le jeu
+                    try { followed.Dispose(); } catch { }
+                    s.P = null;
+                    HdrLog.Write("Aucune fenêtre du jeu après " + (HelperGraceMs / 1000) + " s : fin de la session.");
+                    Finish(s, true);
+                });
+                return;
+            }
+            End(s);
+        }
+
+        void End(Session s)
+        {
             sessions.Remove(s);
-            if (!s.WeTurnedOn) return;
-            var heir = sessions.FirstOrDefault(x => x.Screen == s.Screen);
-            if (heir != null) { heir.WeTurnedOn = true; return; }
-            var mon = Displays.List().FirstOrDefault(m => m.DevicePath == s.Screen);
-            if (mon != null && mon.Active && mon.HdrOn) app.HdrAuto(mon, false, L.T("HDR coupé : {0} fermé.", s.G.Name));
+            if (s.WeTurnedOn)
+            {
+                var heir = sessions.FirstOrDefault(x => x.Screen == s.Screen);
+                if (heir != null) { heir.WeTurnedOn = true; HdrLog.Write("HDR gardé : " + heir.G.Name + " tourne encore sur le même écran."); }
+                else
+                {
+                    var mon = Displays.List().FirstOrDefault(m => m.DevicePath == s.Screen);
+                    if (mon != null && mon.Active && mon.HdrOn) { HdrLog.Write("Jeu fermé : " + s.G.Name + " — HDR coupé sur " + mon.Name + "."); app.HdrAuto(mon, false, L.T("HDR coupé : {0} fermé.", s.G.Name)); }
+                    else HdrLog.Write("Jeu fermé : " + s.G.Name + " — HDR déjà coupé, rien à faire.");
+                }
+            }
+            else HdrLog.Write("Jeu fermé : " + s.G.Name + " — HDR laissé tel quel (il était déjà actif au lancement).");
+            SaveState();
+        }
+
+        // ------------------------------------------------ memoire sur disque (survit a un redemarrage de l'appli)
+        void SaveState()
+        {
+            try
+            {
+                var lines = sessions.Where(x => x.WeTurnedOn).Select(x => x.Screen + "|" + x.G.Key).Distinct().ToList();
+                if (lines.Count == 0) { if (File.Exists(StateFile)) File.Delete(StateFile); }
+                else File.WriteAllLines(StateFile, lines, Encoding.UTF8);
+            }
+            catch { }
+        }
+
+        /// Au demarrage : reprend les jeux pour lesquels l'appli avait active le HDR avant d'etre fermee.
+        public void Recover()
+        {
+            string[] lines;
+            try { if (!File.Exists(StateFile)) return; lines = File.ReadAllLines(StateFile, Encoding.UTF8); }
+            catch { return; }
+            foreach (var line in lines)
+            {
+                var p = line.Split('|');
+                if (p.Length < 2) continue;
+                string screen = p[0], key = p[1];
+                var g = Games.All.FirstOrDefault(x => x.Key == key);
+                var running = g == null ? new List<int>() : Games.FindAllRunning(g, 0);
+                if (g != null && running.Count > 0)
+                {
+                    var s = new Session { G = g, Screen = screen, WeTurnedOn = true };
+                    var windowed = WithWindow(running);
+                    int pid = running.FirstOrDefault(id => windowed.Contains(id));
+                    if (pid == 0) pid = running[0];
+                    if (Follow(s, pid)) { sessions.Add(s); HdrLog.Write("Reprise après redémarrage : " + g.Name + " tourne encore (pid " + pid + "), HDR gardé."); continue; }
+                }
+                var mon = Displays.List().FirstOrDefault(m => m.DevicePath == screen);
+                string name = g != null ? g.Name : key;
+                if (mon != null && mon.Active && mon.HdrOn) { HdrLog.Write("Reprise après redémarrage : " + name + " n'est plus lancé — HDR coupé sur " + mon.Name + "."); app.HdrAuto(mon, false, L.T("HDR coupé : {0} fermé.", name)); }
+                else HdrLog.Write("Reprise après redémarrage : " + name + " n'est plus lancé, HDR déjà coupé.");
+            }
+            SaveState();
         }
     }
 
@@ -454,6 +612,7 @@ namespace LnkScreenManager
             if (target == null) target = mons.Where(m => m.Active && m.HdrSupported).OrderByDescending(m => m.Primary).FirstOrDefault();
             bool turned = false;
             if (target != null && target.Active && target.HdrSupported && !target.HdrOn) { Displays.SetHdr(target, true); turned = true; Thread.Sleep(500); }
+            HdrLog.Write("Jouer en HDR : " + g.Name + " — " + (turned ? "HDR activé sur " + target.Name + " avant le lancement." : "HDR déjà actif ou écran sans HDR, lancement simple."));
 
             if (g.SteamId != null) Process.Start("steam://rungameid/" + g.SteamId);
             else if (g.EpicApp != null) Process.Start("com.epicgames.launcher://apps/" + Uri.EscapeDataString(g.EpicApp) + "?action=launch&silent=true");
@@ -472,6 +631,7 @@ namespace LnkScreenManager
             }
             var now = Displays.List().FirstOrDefault(m => m.DevicePath == target.DevicePath);
             if (now != null && now.Active && now.HdrOn) Displays.SetHdr(now, false);
+            HdrLog.Write("Jouer en HDR : " + g.Name + " fermé — HDR coupé sur " + target.Name + ".");
             return 0;
         }
     }

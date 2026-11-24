@@ -17,7 +17,7 @@ namespace LnkScreenManager
     {
         public const string Name = "LNK Screen Manager";
         public const string By = "By LNK Co © 2026";
-        public const string Version = "1.4.1";
+        public const string Version = "1.4.2";
     }
 
     // ------------------------------------------------------------------ Theme

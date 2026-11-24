@@ -23,8 +23,8 @@ using Microsoft.Win32;
 [assembly: AssemblyCompany("LNK Co")]
 [assembly: AssemblyProduct("LNK Screen Manager")]
 [assembly: AssemblyCopyright("© 2026 LNK Co")]
-[assembly: AssemblyVersion("1.4.1.0")]
-[assembly: AssemblyFileVersion("1.4.1.0")]
+[assembly: AssemblyVersion("1.4.2.0")]
+[assembly: AssemblyFileVersion("1.4.2.0")]
 
 namespace LnkScreenManager
 {
@@ -138,6 +138,7 @@ namespace LnkScreenManager
 
             watcher = new GameWatcher(this);
             ApplyGameSettings();
+            Post(watcher.Recover); // un jeu en HDR auto tournait quand l'appli a ete fermee ? on reprend ou on coupe le HDR
             if (Settings.AutoHdrGames && Settings.WikiLookup) LookupGames(false);
 
             if (hidden) Post(Win.Trim); else ShowMain(Page.Screens); // Post : apres l'initialisation de la boucle de messages
