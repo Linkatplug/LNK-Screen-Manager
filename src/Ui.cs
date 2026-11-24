@@ -16,7 +16,7 @@ namespace LnkScreenManager
     {
         public const string Name = "LNK Screen Manager";
         public const string By = "By LNK Co © 2026";
-        public const string Version = "1.1";
+        public const string Version = "1.2";
     }
 
     // ------------------------------------------------------------------ Theme (plat, une seule couleur d'accent)
@@ -93,6 +93,7 @@ namespace LnkScreenManager
     static class Glyph
     {
         public const string Settings = "", Identify = "", Check = "", Edit = "";
+        public const string Game = "";
     }
 
     static class Win

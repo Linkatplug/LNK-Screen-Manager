@@ -22,8 +22,8 @@ using Microsoft.Win32;
 [assembly: AssemblyCompany("LNK Co")]
 [assembly: AssemblyProduct("LNK Screen Manager")]
 [assembly: AssemblyCopyright("© 2026 LNK Co")]
-[assembly: AssemblyVersion("1.1.0.0")]
-[assembly: AssemblyFileVersion("1.1.0.0")]
+[assembly: AssemblyVersion("1.2.0.0")]
+[assembly: AssemblyFileVersion("1.2.0.0")]
 
 namespace LnkScreenManager
 {
@@ -50,12 +50,17 @@ namespace LnkScreenManager
         }
 
         static bool Get(string k, bool def) { Load(); string v; return d.TryGetValue(k, out v) ? v == "1" : def; }
-        static void Set(string k, bool v) { Load(); d[k] = v ? "1" : "0"; try { File.WriteAllLines(FilePath, d.Select(kv => kv.Key + "=" + kv.Value)); } catch { } }
+        static void Set(string k, bool v) { Load(); d[k] = v ? "1" : "0"; Save(); }
+        static void Save() { try { File.WriteAllLines(FilePath, d.Select(kv => kv.Key + "=" + kv.Value)); } catch { } }
 
         public static bool TrayOnClose { get { return Get("TrayOnClose", true); } set { Set("TrayOnClose", value); } }
         public static bool TrayHintShown { get { return Get("TrayHintShown", false); } set { Set("TrayHintShown", value); } }
         public static bool NotifyChanges { get { return Get("NotifyChanges", true); } set { Set("NotifyChanges", value); } }
         public static bool ShowMap { get { return Get("ShowMap", true); } set { Set("ShowMap", value); } }
+        public static bool AutoHdrGames { get { return Get("AutoHdrGames", true); } set { Set("AutoHdrGames", value); } }
+        public static bool WikiLookup { get { return Get("WikiLookup", true); } set { Set("WikiLookup", value); } }
+        /// Ecran a passer en HDR pour les jeux ("" = ecran ou s'affiche le jeu).
+        public static string HdrTarget { get { Load(); string v; return d.TryGetValue("HdrTarget", out v) ? v : ""; } set { Load(); d["HdrTarget"] = value ?? ""; Save(); } }
     }
 
     static class Startup
@@ -99,6 +104,8 @@ namespace LnkScreenManager
         readonly Control sync = new Control();
         readonly System.Windows.Forms.Timer debounce = new System.Windows.Forms.Timer { Interval = 600 };
         MainForm form;
+        GamesForm gamesForm;
+        readonly GameWatcher watcher;
         DateTime lastRefresh = DateTime.MinValue;
 
         public List<Monitor> Mons = new List<Monitor>();
@@ -120,6 +127,11 @@ namespace LnkScreenManager
             tray.Visible = true;
             debounce.Tick += (s, e) => { debounce.Stop(); Refresh(); };
             SystemEvents.DisplaySettingsChanged += OnDisplayChanged;
+
+            watcher = new GameWatcher(this);
+            ApplyGameSettings();
+            if (Settings.AutoHdrGames && Settings.WikiLookup)
+                new Thread(() => { Games.LookupMissing(); Post(() => { if (form == null && gamesForm == null) Win.Trim(); }); }) { IsBackground = true, Priority = ThreadPriority.BelowNormal }.Start();
 
             if (hidden) Post(Win.Trim); else ShowMain(); // Post : apres l'initialisation de la boucle de messages
         }
@@ -319,25 +331,29 @@ namespace LnkScreenManager
             Refresh(); SetStatus("Profil supprimé.", false);
         }
 
-        public void MakeShortcut(string profile)
+        public void MakeShortcut(string profile) { CreateShortcut("LNK - " + profile, "--profile \"" + profile + "\"", Brand.Name + " - profil " + profile); }
+
+        public void MakePlayShortcut(Game g) { CreateShortcut("Jouer en HDR - " + g.Name, "--play \"" + g.Key + "\"", "Active le HDR puis lance " + g.Name); }
+
+        void CreateShortcut(string title, string args, string desc)
         {
             object shell = null, sc = null;
             try
             {
                 var t = Type.GetTypeFromProgID("WScript.Shell");
                 shell = Activator.CreateInstance(t);
-                string safe = string.Join("_", profile.Split(Path.GetInvalidFileNameChars()));
-                string lnk = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "LNK - " + safe + ".lnk");
+                string safe = string.Join("_", title.Split(Path.GetInvalidFileNameChars()));
+                string lnk = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), safe + ".lnk");
                 sc = t.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { lnk });
                 var st = sc.GetType();
                 Action<string, object> set = (name, val) => st.InvokeMember(name, BindingFlags.SetProperty, null, sc, new[] { val });
                 set("TargetPath", Application.ExecutablePath);
-                set("Arguments", "--profile \"" + profile + "\"");
+                set("Arguments", args);
                 set("WorkingDirectory", Path.GetDirectoryName(Application.ExecutablePath));
                 set("IconLocation", Application.ExecutablePath + ",0");
-                set("Description", Brand.Name + " - profil " + profile);
+                set("Description", desc);
                 st.InvokeMember("Save", BindingFlags.InvokeMethod, null, sc, null);
-                SetStatus("Raccourci « LNK - " + safe + " » créé sur le bureau.", false);
+                SetStatus("Raccourci « " + safe + " » créé sur le bureau.", false);
             }
             catch (Exception ex) { SetStatus("Raccourci impossible : " + ex.Message, true); }
             finally
@@ -345,6 +361,47 @@ namespace LnkScreenManager
                 if (sc != null) Marshal.FinalReleaseComObject(sc);
                 if (shell != null) Marshal.FinalReleaseComObject(shell);
             }
+        }
+
+        // ------------------------------------------------ HDR auto pour les jeux
+        public void ApplyGameSettings()
+        {
+            if (Settings.AutoHdrGames) watcher.Start(); else watcher.Stop();
+            watcher.Reset();
+        }
+
+        public void GamesChanged() { watcher.Reset(); }
+        public int GameSessions { get { return watcher.ActiveCount; } }
+
+        /// Bascule HDR declenchee par un jeu (independante des autres actions en cours).
+        public void HdrAuto(Monitor m, bool on, string msg)
+        {
+            new Thread(() =>
+            {
+                string err = null;
+                try { Displays.SetHdr(m, on); } catch (Exception ex) { err = ex.Message; }
+                Post(() =>
+                {
+                    Refresh();
+                    SetStatus(err ?? msg, err != null);
+                    if (form == null && (err != null || Settings.NotifyChanges)) tray.ShowBalloonTip(2000, Brand.Name, err ?? msg, ToolTipIcon.None);
+                    if (form == null && gamesForm == null) Win.Trim();
+                });
+            }) { IsBackground = true }.Start();
+        }
+
+        public void ShowGames()
+        {
+            if (Exiting) return;
+            if (gamesForm == null)
+            {
+                Refresh();
+                gamesForm = new GamesForm(this);
+                gamesForm.FormClosed += (s, e) => { gamesForm = null; if (form == null && !Exiting) Post(Win.Trim); };
+                gamesForm.Show();
+            }
+            else if (gamesForm.WindowState == FormWindowState.Minimized) gamesForm.WindowState = FormWindowState.Normal;
+            gamesForm.Activate();
         }
 
         // ------------------------------------------------ menu pres de l'heure
@@ -398,6 +455,11 @@ namespace LnkScreenManager
                 ren.DropDownItems.Add(Menus.Item(Number(m) + "   " + m.Name + (m.HasCustomName ? "   (" + m.Model + ")" : ""), (s, e) => RenameScreen(m)));
             }
             menu.Items.Add(ren);
+            var auto = Menus.Item("HDR auto pour les jeux", (s, e) => { Settings.AutoHdrGames = !Settings.AutoHdrGames; ApplyGameSettings(); });
+            auto.Checked = Settings.AutoHdrGames;
+            menu.Items.Add(auto);
+            menu.Items.Add(Menus.Item("Jeux…", (s, e) => ShowGames()));
+            menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(Menus.Item("Tout allumer", (s, e) => AllOn()));
             menu.Items.Add(Menus.Item("Identifier les écrans", (s, e) => Identify(null)));
             menu.Items.Add(new ToolStripSeparator());
@@ -443,7 +505,9 @@ namespace LnkScreenManager
             if (Exiting) return;
             Exiting = true;
             SystemEvents.DisplaySettingsChanged -= OnDisplayChanged;
+            watcher.Stop();
             tray.Visible = false;
+            if (gamesForm != null) gamesForm.Close();
             if (form != null) form.Close();
             ExitThread();
         }
@@ -481,7 +545,10 @@ namespace LnkScreenManager
             header.Paint += PaintHeader;
             var bOpt = new IconButton(Glyph.Settings);
             var bId = new IconButton(Glyph.Identify);
-            tips.SetToolTip(bOpt, "Options"); tips.SetToolTip(bId, "Identifier les écrans");
+            var bGames = new IconButton(Glyph.Game);
+            tips.SetToolTip(bOpt, "Options"); tips.SetToolTip(bId, "Identifier les écrans"); tips.SetToolTip(bGames, "Jeux et HDR auto");
+            bGames.Click += (s, e) => app.ShowGames();
+            header.Controls.Add(bGames);
             bOpt.Click += (s, e) => optionsMenu.Show(bOpt, new Point(bOpt.Width - optionsMenu.PreferredSize.Width, bOpt.Height + Theme.D(2)));
             bId.Click += (s, e) => app.Identify(null);
             header.Controls.Add(bOpt); header.Controls.Add(bId);
@@ -490,6 +557,7 @@ namespace LnkScreenManager
                 int y = (header.Height - bOpt.Height) / 2;
                 bOpt.Location = new Point(header.Width - Theme.D(14) - bOpt.Width, y);
                 bId.Location = new Point(bOpt.Left - Theme.D(2) - bId.Width, y);
+                bGames.Location = new Point(bId.Left - Theme.D(2) - bGames.Width, y);
             };
 
             body.Dock = DockStyle.Fill; body.AutoScroll = true; body.BackColor = Theme.Bg;
@@ -685,6 +753,7 @@ namespace LnkScreenManager
             optionsMenu.Items.AddRange(new ToolStripItem[] { tray1, mapItem, notif, boot, new ToolStripSeparator() });
             optionsMenu.Items.Add(Menus.Item("Tout allumer", (s, e) => app.AllOn()));
             optionsMenu.Items.Add(Menus.Item("Couper le HDR partout", (s, e) => app.AllHdrOff()));
+            optionsMenu.Items.Add(Menus.Item("Jeux et HDR auto…", (s, e) => app.ShowGames()));
             optionsMenu.Items.Add(Menus.Item("Ouvrir le dossier des données", (s, e) => { try { System.Diagnostics.Process.Start("explorer.exe", "\"" + AppData.Dir + "\""); } catch { } }));
             optionsMenu.Items.Add(new ToolStripSeparator());
             optionsMenu.Items.Add(Menus.Item("À propos", (s, e) => Dialogs.About(this)));
@@ -722,6 +791,7 @@ namespace LnkScreenManager
                     Profiles.Apply(p); Signal(RefreshEvent); return 0;
                 }
                 if (a0 == "--all-on") { Displays.AllOn(); Signal(RefreshEvent); return 0; }
+                if (a0 == "--play" && args.Length >= 2) { int r = Player.Play(args[1]); Signal(RefreshEvent); return r; }
                 if (a0 == "--list")
                 {
                     Console.WriteLine(string.Join("\n", Displays.List().Select(m => m.Label + "   " + m.Hz + " Hz   HDR " + (m.HdrSupported ? (m.HdrOn ? "ON" : "off") : "n/a"))));
