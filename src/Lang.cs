@@ -1,4 +1,4 @@
-// LNK Screen Manager - langues (francais, English, Deutsch, Espanol, Italiano, Portugues).
+﻿// LNK Screen Manager - langues (francais, English, Deutsch, Espanol, Italiano, Portugues).
 // By LNK Co (c) 2026
 //
 // Le texte francais sert de cle : L.T("Écrans") renvoie la traduction de la langue active.
@@ -144,6 +144,7 @@ namespace LnkScreenManager
             { "Au lancement d'un jeu compatible", R("When a compatible game starts", "Beim Start eines kompatiblen Spiels", "Al iniciar un juego compatible", "All'avvio di un gioco compatibile", "Ao iniciar um jogo compatível") },
             { "Écran à passer en HDR", R("Screen to switch to HDR", "Bildschirm für HDR", "Pantalla que pasa a HDR", "Schermo da passare in HDR", "Tela a mudar para HDR") },
             { "Infos HDR en ligne", R("Online HDR info", "Online-HDR-Infos", "Información HDR en línea", "Info HDR online", "Informações de HDR online") },
+            { "PCGamingWiki · envoie l'identifiant Steam ou le titre du jeu", R("PCGamingWiki · sends the Steam ID or the game title", "PCGamingWiki · sendet die Steam-ID oder den Spieltitel", "PCGamingWiki · envía el ID de Steam o el título del juego", "PCGamingWiki · invia l'ID Steam o il titolo del gioco", "PCGamingWiki · envia o ID da Steam ou o título do jogo") },
             { "PCGamingWiki · seul l'identifiant Steam est envoyé", R("PCGamingWiki · only the Steam ID is sent", "PCGamingWiki · nur die Steam-ID wird gesendet", "PCGamingWiki · solo se envía el ID de Steam", "PCGamingWiki · viene inviato solo l'ID Steam", "PCGamingWiki · só o ID da Steam é enviado") },
             { "Couper", R("Turn off", "Ausschalten", "Desactivar", "Disattiva", "Desativar") },
             { "Actions", R("Actions", "Aktionen", "Acciones", "Azioni", "Ações") },

@@ -16,7 +16,7 @@ Turn your screens on / off and toggle HDR in one click, without digging through 
 ### Features
 - **Screens**: one *Screen* switch and one *HDR* switch per monitor, layout mini-map, custom names (“Main”, “Top left”…), identify.
 - **Profiles**: save your screen setup (e.g. “Gaming”) and apply it in one click, from a desktop shortcut or the command line.
-- **Auto HDR for games**: games are detected automatically (Steam, Epic, games known to Windows, manual add). A compatible game switches its screen to HDR when it starts; the previous state comes back when it closes. “Play in HDR” shortcut for games that only check HDR at startup.
+- **Auto HDR for games**: games are detected automatically (Steam, Epic, GOG, Xbox / PC Game Pass, EA, Ubisoft, Battle.net, Amazon, Riot, games known to Windows, manual add). A compatible game switches its screen to HDR when it starts; the previous state comes back when it closes. “Play in HDR” shortcut for games that only check HDR at startup.
 - **Tray icon** next to the clock: profiles, screens and HDR on right-click. The X button minimizes the app there (can be turned off).
 - Dark / light / system theme, 6 languages, sharp at any display scaling (100 % to 200 %, mixed-DPI setups), automatic compact layout on small screens.
 - **Lightweight**: ~2-4 MB of RAM and 0 % CPU when idle (no polling).
@@ -28,7 +28,7 @@ Nothing to install: copy `LNK Screen Manager.exe` anywhere and run it. Windows 1
 
 ### Data & privacy
 - Profiles, screen names, layout and settings: `%APPDATA%\LNK Screen Manager` (nothing else is written, except the Windows startup entry if that option is on).
-- The only network access is the optional *Online HDR info* lookup: it sends each game's **public Steam ID** to PCGamingWiki, once per game. Can be turned off in Settings.
+- The only network access is the optional *Online HDR info* lookup: it sends each game's **public Steam ID** (or, for other stores, its **title**) to PCGamingWiki, once per game. Can be turned off in Settings.
 - Anti-cheat safe: the app never touches games, it only changes the Windows display setting.
 
 ### Command line
@@ -51,7 +51,7 @@ Adding a language: `src\Lang.cs` (one column in the table).
 ### Fonctions
 - **Écrans** : un interrupteur *Écran* et un interrupteur *HDR* par moniteur, mini-carte de la disposition, noms personnalisés (« Main », « Gauche haut »…), identification.
 - **Profils** : enregistre l'état des écrans (ex. « Jeu ») et applique-le en un clic, depuis un raccourci bureau ou en ligne de commande.
-- **HDR auto pour les jeux** : jeux détectés automatiquement (Steam, Epic, jeux reconnus par Windows, ajout manuel). Un jeu compatible passe l'écran en HDR à son lancement ; l'état d'avant revient à sa fermeture. Raccourci « Jouer en HDR » pour les jeux qui ne détectent le HDR qu'au démarrage.
+- **HDR auto pour les jeux** : jeux détectés automatiquement (Steam, Epic, GOG, Xbox / PC Game Pass, EA, Ubisoft, Battle.net, Amazon, Riot, jeux reconnus par Windows, ajout manuel). Un jeu compatible passe l'écran en HDR à son lancement ; l'état d'avant revient à sa fermeture. Raccourci « Jouer en HDR » pour les jeux qui ne détectent le HDR qu'au démarrage.
 - **Icône près de l'heure** : profils, écrans et HDR au clic droit. Le X réduit l'appli à cet endroit (désactivable).
 - Mode sombre / clair / comme Windows, 6 langues, net à toutes les échelles d'affichage (100 % à 200 %, écrans d'échelles différentes), mise en page compacte automatique sur petits écrans.
 - **Léger** : au repos ~2-4 Mo de RAM et 0 % de processeur (aucune surveillance en boucle).
@@ -63,7 +63,7 @@ Rien à installer : copier `LNK Screen Manager.exe` où on veut et le lancer. Wi
 
 ### Données et vie privée
 - Profils, noms d'écrans, disposition et réglages : `%APPDATA%\LNK Screen Manager` (rien d'autre n'est écrit, sauf la clé de démarrage Windows si l'option est activée).
-- Seule connexion réseau : l'option *Infos HDR en ligne* interroge PCGamingWiki avec l'**identifiant Steam public** de chaque jeu, une seule fois par jeu. Désactivable dans Réglages.
+- Seule connexion réseau : l'option *Infos HDR en ligne* interroge PCGamingWiki avec l'**identifiant Steam public** de chaque jeu (ou son **titre** pour les autres boutiques), une seule fois par jeu. Désactivable dans Réglages.
 - Aucun anti-triche concerné : l'appli ne touche jamais aux jeux, elle change uniquement le réglage d'écran de Windows.
 
 ### Ligne de commande

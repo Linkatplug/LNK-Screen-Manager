@@ -790,7 +790,7 @@ namespace LnkScreenManager
             Group(right, L.T("HDR des jeux"),
                 Row(L.T("HDR auto pour les jeux"), L.T("Au lancement d'un jeu compatible"), tgAuto),
                 Row(L.T("Écran à passer en HDR"), null, pScreen),
-                Row(L.T("Infos HDR en ligne"), L.T("PCGamingWiki · seul l'identifiant Steam est envoyé"), tgWiki),
+                Row(L.T("Infos HDR en ligne"), L.T("PCGamingWiki · envoie l'identifiant Steam ou le titre du jeu"), tgWiki),
                 Row(L.T("Source des infos HDR"), "PCGamingWiki.com · CC BY-NC-SA 3.0", pWiki));
             Group(right, L.T("Actions"),
                 Row(L.T("Allumer tous les écrans"), null, pAll),

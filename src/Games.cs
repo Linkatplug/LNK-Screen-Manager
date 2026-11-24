@@ -42,7 +42,7 @@ namespace LnkScreenManager
         {
             get
             {
-                if (Wiki == null) return L.T(SteamId != null ? "info HDR en attente" : "pas d'info HDR automatique");
+                if (Wiki == null) return L.T(Settings.WikiLookup ? "info HDR en attente" : "pas d'info HDR automatique");
                 if (Wiki == "true" || Wiki == "always on") return L.T("HDR natif");
                 if (Wiki == "limited") return L.T("HDR (limité)");
                 if (Wiki == "false" || Wiki == "hackable" || Wiki == "n/a") return L.T("pas de HDR");
@@ -67,7 +67,8 @@ namespace LnkScreenManager
         {
             var saved = LoadSaved();
             var res = new List<Game>();
-            foreach (var g in Steam().Concat(Epic())) if (!res.Any(x => x.Key == g.Key)) res.Add(g);
+            foreach (var g in Steam().Concat(Epic()).Concat(Gog()).Concat(Xbox()).Concat(Ubisoft()).Concat(EaLegacy()).Concat(FromUninstall()))
+                if (!res.Any(x => x.Key == g.Key || SameFolder(x, g))) res.Add(g);
             foreach (var g in WindowsKnown()) if (!res.Any(x => x.Key == g.Key || x.Matches(g.Exe))) res.Add(g);
             foreach (var s in saved.Values.Where(s => s.Manual && File.Exists(s.Exe)))
                 if (!res.Any(x => x.Key == s.Key)) res.Add(s);
@@ -107,6 +108,205 @@ namespace LnkScreenManager
             }
             catch { }
             return res;
+        }
+
+        // ------------------------------------------------ autres boutiques
+        static readonly string[] Special =
+        {
+            Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
+            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+        };
+
+        /// Dossier de jeu utilisable : il existe et il est assez precis. Refuse les racines (C:\Jeux) et les dossiers
+        /// systeme (Program Files, profil...) : sinon tous les programmes qu'ils contiennent seraient pris pour le jeu.
+        public static string SafeFolder(string f)
+        {
+            if (string.IsNullOrWhiteSpace(f)) return null;
+            try
+            {
+                f = Norm(f.Trim().Trim('"'));
+                if (!Directory.Exists(f)) return null;
+                if (f.Split(new[] { '\\' }, StringSplitOptions.RemoveEmptyEntries).Length < 3) return null;
+                foreach (var s0 in Special)
+                {
+                    if (string.IsNullOrEmpty(s0)) continue;
+                    string s = s0.TrimEnd('\\');
+                    if (string.Equals(s, f, StringComparison.OrdinalIgnoreCase) || s.StartsWith(f + "\\", StringComparison.OrdinalIgnoreCase)) return null;
+                }
+                return f;
+            }
+            catch { return null; }
+        }
+
+        static bool SameFolder(Game a, Game b)
+        {
+            if (a.Folder == null || b.Folder == null) return false;
+            string x = a.Folder.TrimEnd('\\'), y = b.Folder.TrimEnd('\\');
+            return string.Equals(x, y, StringComparison.OrdinalIgnoreCase)
+                || x.StartsWith(y + "\\", StringComparison.OrdinalIgnoreCase) || y.StartsWith(x + "\\", StringComparison.OrdinalIgnoreCase);
+        }
+
+        static List<Game> Gog()
+        {
+            var res = new List<Game>();
+            foreach (var root in new[] { @"SOFTWARE\WOW6432Node\GOG.com\Games", @"SOFTWARE\GOG.com\Games" }) ReadGog(Registry.LocalMachine, root, res);
+            return res;
+        }
+
+        /// Jeux GOG (cle de registre ecrite par GOG Galaxy et les installateurs GOG).
+        public static void ReadGog(RegistryKey hive, string root, List<Game> res)
+        {
+            try
+            {
+                using (var k = hive.OpenSubKey(root))
+                {
+                    if (k == null) return;
+                    foreach (var id in k.GetSubKeyNames())
+                        using (var c = k.OpenSubKey(id))
+                        {
+                            if (c == null) continue;
+                            string folder = SafeFolder(c.GetValue("path") as string), name = c.GetValue("gameName") as string;
+                            if (folder == null || res.Any(x => x.Key == "gog:" + id)) continue;
+                            res.Add(new Game { Key = "gog:" + id, Name = string.IsNullOrWhiteSpace(name) ? Path.GetFileName(folder) : name.Trim(), Source = "GOG", Folder = folder });
+                        }
+                }
+            }
+            catch { }
+        }
+
+        /// Jeux Xbox / PC Game Pass : dossiers XboxGames de chaque disque (fichier MicrosoftGame.config).
+        public static List<Game> Xbox() { return Xbox(DriveInfo.GetDrives().Where(d => d.DriveType == DriveType.Fixed && d.IsReady).Select(d => Path.Combine(d.RootDirectory.FullName, "XboxGames"))); }
+
+        public static List<Game> Xbox(IEnumerable<string> roots)
+        {
+            var res = new List<Game>();
+            foreach (var root in roots)
+            {
+                try
+                {
+                    if (!Directory.Exists(root)) continue;
+                    foreach (var dir in Directory.GetDirectories(root))
+                    {
+                        string content = Path.Combine(dir, "Content"), cfg = Path.Combine(content, "MicrosoftGame.config");
+                        if (!File.Exists(cfg)) continue;
+                        var dn = Regex.Match(File.ReadAllText(cfg), "DefaultDisplayName\\s*=\\s*\"([^\"]+)\"");
+                        string name = dn.Success && !dn.Groups[1].Value.StartsWith("ms-resource", StringComparison.OrdinalIgnoreCase) ? dn.Groups[1].Value : Path.GetFileName(dir);
+                        res.Add(new Game { Key = "xbox:" + Path.GetFileName(dir).ToLowerInvariant(), Name = name.Trim(), Source = "Xbox", Folder = content });
+                    }
+                }
+                catch { }
+            }
+            return res;
+        }
+
+        /// Jeux Ubisoft Connect.
+        static List<Game> Ubisoft()
+        {
+            var res = new List<Game>();
+            try
+            {
+                using (var k = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\WOW6432Node\Ubisoft\Launcher\Installs"))
+                {
+                    if (k == null) return res;
+                    foreach (var id in k.GetSubKeyNames())
+                        using (var c = k.OpenSubKey(id))
+                        {
+                            string folder = SafeFolder(c == null ? null : c.GetValue("InstallDir") as string);
+                            if (folder == null) continue;
+                            res.Add(new Game { Key = "ubi:" + id, Name = UninstallName("Uplay Install " + id) ?? Path.GetFileName(folder), Source = "Ubisoft", Folder = folder });
+                        }
+                }
+            }
+            catch { }
+            return res;
+        }
+
+        /// Anciens jeux EA / Origin (cle "EA Games\<jeu>" avec "Install Dir").
+        static List<Game> EaLegacy()
+        {
+            var res = new List<Game>();
+            foreach (var root in new[] { @"SOFTWARE\WOW6432Node\EA Games", @"SOFTWARE\EA Games" })
+            {
+                try
+                {
+                    using (var k = Registry.LocalMachine.OpenSubKey(root))
+                    {
+                        if (k == null) continue;
+                        foreach (var n in k.GetSubKeyNames())
+                            using (var c = k.OpenSubKey(n))
+                            {
+                                string folder = SafeFolder(c == null ? null : c.GetValue("Install Dir") as string);
+                                if (folder == null || res.Any(x => x.Key == "ea:" + n.ToLowerInvariant())) continue;
+                                res.Add(new Game { Key = "ea:" + n.ToLowerInvariant(), Name = n, Source = "EA", Folder = folder });
+                            }
+                    }
+                }
+                catch { }
+            }
+            return res;
+        }
+
+        static readonly string[] UninstallRoots = { @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall", @"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall" };
+
+        static string UninstallName(string keyName)
+        {
+            foreach (var hive in new[] { Registry.LocalMachine, Registry.CurrentUser })
+                foreach (var root in UninstallRoots)
+                    try { using (var k = hive.OpenSubKey(root + "\\" + keyName)) { var n = k == null ? null : k.GetValue("DisplayName") as string; if (!string.IsNullOrWhiteSpace(n)) return n.Trim(); } }
+                    catch { }
+            return null;
+        }
+
+        static List<Game> FromUninstall()
+        {
+            var res = new List<Game>();
+            foreach (var hive in new[] { Registry.LocalMachine, Registry.CurrentUser })
+                foreach (var root in UninstallRoots) ReadUninstall(hive, root, res);
+            return res;
+        }
+
+        /// Jeux installes par EA app, Battle.net, Amazon Games ou Riot (reperes par leur entree « Programmes installes »).
+        public static void ReadUninstall(RegistryKey hive, string root, List<Game> res)
+        {
+            try
+            {
+                using (var k = hive.OpenSubKey(root))
+                {
+                    if (k == null) return;
+                    foreach (var id in k.GetSubKeyNames())
+                        using (var c = k.OpenSubKey(id))
+                        {
+                            if (c == null) continue;
+                            string name = c.GetValue("DisplayName") as string;
+                            if (string.IsNullOrWhiteSpace(name)) continue;
+                            string src = LauncherOf(name, (c.GetValue("UninstallString") as string) ?? "", (c.GetValue("Publisher") as string) ?? "");
+                            if (src == null) continue;
+                            string folder = SafeFolder(c.GetValue("InstallLocation") as string);
+                            if (folder == null) continue;
+                            string key = src.ToLowerInvariant().Replace(".", "") + ":" + id.ToLowerInvariant();
+                            if (!res.Any(x => x.Key == key)) res.Add(new Game { Key = key, Name = name.Trim(), Source = src, Folder = folder });
+                        }
+                }
+            }
+            catch { }
+        }
+
+        static string LauncherOf(string name, string uninst, string pub)
+        {
+            string u = uninst.ToLowerInvariant(), n = name.Trim().ToLowerInvariant();
+            if (u.Contains("amazon game remover")) return "Amazon";
+            if (u.Contains("battle.net") && n != "battle.net") return "Battle.net";
+            if (u.Contains("riotclientservices") && !n.StartsWith("riot client")) return "Riot";
+            bool ea = u.Contains("eainstaller") || u.Contains("\\ea desktop\\") || u.Contains("\\origin\\") || pub.IndexOf("Electronic Arts", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (ea && !(n.StartsWith("ea app") || n.StartsWith("ea desktop") || n.StartsWith("ea core") || n == "origin")) return "EA";
+            return null;
         }
 
         static List<Game> Epic()
@@ -253,7 +453,7 @@ namespace LnkScreenManager
 
         // ------------------------------------------------ PCGamingWiki
         /// Nombre de jeux Steam dont l'info HDR n'a pas encore ete cherchee.
-        public static int MissingCount { get { return All.Count(x => x.SteamId != null && x.Wiki == null); } }
+        public static int MissingCount { get { return All.Count(x => x.Wiki == null); } }
 
         /// Cherche l'info HDR des jeux Steam pas encore connus. Renvoie le nombre de jeux mis a jour.
         /// progress(fait, total, jeu en cours) est appele avant chaque jeu ; offline = PCGamingWiki injoignable.
@@ -262,7 +462,8 @@ namespace LnkScreenManager
             ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072; // TLS 1.2
             offline = false;
             int n = 0;
-            var todo = All.Where(x => x.SteamId != null && x.Wiki == null).ToList();
+            // jeux Steam d'abord (identifiant fiable), puis les autres boutiques (recherche par nom exact)
+            var todo = All.Where(x => x.Wiki == null).OrderBy(x => x.SteamId == null ? 1 : 0).ToList();
             foreach (var g in todo)
             {
                 if (progress != null) progress(n, todo.Count, g.Name);
@@ -277,6 +478,7 @@ namespace LnkScreenManager
 
         static string WikiHdr(string appId, string name)
         {
+            if (appId == null) return WikiByExactName(name);
             try
             {
                 // 1) redirection officielle identifiant Steam -> page du jeu
@@ -310,6 +512,42 @@ namespace LnkScreenManager
                 return resp != null && (int)resp.StatusCode == 404 ? "unknown" : null;
             }
             catch (Exception ex) { LastError = ex.ToString(); return null; }
+        }
+
+        /// Jeux hors Steam : recherche par nom, en ne gardant qu'un titre IDENTIQUE (sinon « inconnu »,
+        /// pour ne pas confondre deux jeux proches comme « Overwatch » et « Overwatch 2 »).
+        static string WikiByExactName(string name)
+        {
+            string want = TitleKey(name);
+            if (want.Length == 0) return "unknown";
+            try
+            {
+                string clean = Regex.Replace(name, "[™®©]", "").Trim();
+                string json = Get("https://www.pcgamingwiki.com/w/api.php?action=query&list=search&srwhat=title&srlimit=5&format=json&srsearch=" + Uri.EscapeDataString(clean));
+                foreach (Match m in Regex.Matches(json, "\"title\":\"((?:[^\"\\\\]|\\\\.)*)\""))
+                {
+                    string title = Regex.Unescape(m.Groups[1].Value);
+                    if (TitleKey(title) != want) continue;
+                    string w = PageHdr(title, null);
+                    if (w != null) return w;
+                }
+                return "unknown";
+            }
+            catch (WebException ex)
+            {
+                LastError = ex.Message;
+                var resp = ex.Response as HttpWebResponse;
+                return resp != null && (int)resp.StatusCode == 404 ? "unknown" : null;
+            }
+            catch (Exception ex) { LastError = ex.ToString(); return null; }
+        }
+
+        /// Titre normalise pour comparaison : minuscules, sans symboles ni ponctuation.
+        public static string TitleKey(string s)
+        {
+            s = Regex.Replace((s ?? "").ToLowerInvariant(), "[™®©]", "");
+            s = Regex.Replace(s, "[^\\p{L}\\p{N}]+", " ");
+            return s.Trim();
         }
 
         /// Valeur du champ "hdr" d'une page ; si requiredAppId est donne, la page doit porter cet identifiant Steam.
