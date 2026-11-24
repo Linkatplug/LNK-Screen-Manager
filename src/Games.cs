@@ -35,6 +35,9 @@ namespace LnkScreenManager
         {
             if (string.IsNullOrEmpty(path)) return false;
             if (Exe != null && string.Equals(path, Exe, StringComparison.OrdinalIgnoreCase)) return true;
+            // jeu ajoute a la main : reconnu aussi par le nom du programme, ou qu'il soit
+            // (les lanceurs mettent souvent le jeu dans un dossier qui change a chaque mise a jour : ...\v3.1.1\bin\jeu.exe)
+            if (Manual && Exe != null && !Games.GenericExe(Exe) && string.Equals(Path.GetFileName(path), Path.GetFileName(Exe), StringComparison.OrdinalIgnoreCase)) return true;
             return Folder != null && path.StartsWith(Folder.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase);
         }
 
@@ -410,6 +413,41 @@ namespace LnkScreenManager
             }
         }
 
+        /// Nom de programme trop courant pour reconnaitre un jeu par son seul nom (game.exe, launcher.exe...).
+        public static bool GenericExe(string exe)
+        {
+            string n = Path.GetFileNameWithoutExtension(exe ?? "").ToLowerInvariant();
+            return n.Length < 3 || n == "game" || n == "games" || n == "launcher" || n == "client" || n == "start" || n == "play" || n == "main"
+                || n == "app" || n == "application" || n == "run" || n == "bin" || n == "win64" || n == "win32" || n == "x64" || n == "shipping"
+                || n.Contains("crashhandler") || n.Contains("crashreport") || n == "java" || n == "javaw" || n == "python" || n == "pythonw";
+        }
+
+        /// Fichier qui ressemble a un installateur ou un desinstallateur (souvent choisi par erreur a la place du jeu).
+        public static bool LooksLikeInstaller(string exe)
+        {
+            string n = Path.GetFileNameWithoutExtension(exe ?? "").ToLowerInvariant();
+            return n.Contains("setup") || n.Contains("install") || n.StartsWith("unins") || n.Contains("uninstall") || n.EndsWith("-updater") || n.Contains("redist");
+        }
+
+        public class OpenProgram { public string Title, Path; }
+
+        /// Programmes qui ont une fenetre ouverte (hors Windows et hors cette appli), pour « Ajouter un jeu ».
+        public static List<OpenProgram> OpenPrograms()
+        {
+            var res = new List<OpenProgram>();
+            string win = Environment.GetFolderPath(Environment.SpecialFolder.Windows).TrimEnd('\\') + "\\";
+            int me = Process.GetCurrentProcess().Id;
+            foreach (var w in Proc.VisibleWindows())
+            {
+                if (w.Key == me) continue;
+                string path = Proc.PathOf(w.Key);
+                if (path == null || path.StartsWith(win, StringComparison.OrdinalIgnoreCase)) continue;
+                if (res.Any(x => string.Equals(x.Path, path, StringComparison.OrdinalIgnoreCase))) continue;
+                res.Add(new OpenProgram { Title = w.Value, Path = path });
+            }
+            return res.OrderBy(x => x.Title, StringComparer.CurrentCultureIgnoreCase).ToList();
+        }
+
         public static Game AddManual(string exe)
         {
             var g = new Game { Key = "exe:" + exe.ToLowerInvariant(), Name = NameOf(exe), Source = "Ajouté", Exe = exe, Manual = true, User = 1 };
@@ -578,6 +616,30 @@ namespace LnkScreenManager
         [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool QueryFullProcessImageName(IntPtr h, int flags, StringBuilder sb, ref int size);
         [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+        delegate bool EnumProc(IntPtr hwnd, IntPtr lParam);
+        [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc proc, IntPtr lParam);
+        [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
+        [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr hwnd, uint cmd);
+        [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr hwnd, int index);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr hwnd, StringBuilder s, int max);
+        [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out int pid);
+
+        /// Fenetres principales visibles (pid, titre) : ni fenetres outils, ni fenetres secondaires.
+        public static List<KeyValuePair<int, string>> VisibleWindows()
+        {
+            var res = new List<KeyValuePair<int, string>>();
+            EnumWindows((hwnd, l) =>
+            {
+                if (!IsWindowVisible(hwnd) || GetWindow(hwnd, 4 /* GW_OWNER */) != IntPtr.Zero) return true;
+                if ((GetWindowLong(hwnd, -20 /* GWL_EXSTYLE */) & 0x80 /* WS_EX_TOOLWINDOW */) != 0) return true;
+                var sb = new StringBuilder(256);
+                if (GetWindowText(hwnd, sb, sb.Capacity) == 0) return true;
+                int pid; GetWindowThreadProcessId(hwnd, out pid);
+                res.Add(new KeyValuePair<int, string>(pid, sb.ToString()));
+                return true;
+            }, IntPtr.Zero);
+            return res;
+        }
 
         /// Chemin de l'exe d'un processus (droits minimaux, marche aussi pour les jeux proteges).
         public static string PathOf(int pid)

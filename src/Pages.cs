@@ -748,15 +748,39 @@ namespace LnkScreenManager
             menu.Show(tile, pt);
         }
 
+        /// « Ajouter un jeu » : un programme ouvert (le plus fiable : le jeu en cours) ou un fichier .exe.
         void AddGame()
         {
-            using (var d = new OpenFileDialog { Title = L.T("Choisir l'exécutable du jeu"), Filter = L.T("Programmes (*.exe)|*.exe") })
+            Menus.Clear(menu);
+            menu.Items.Add(Menus.Header(L.T("Programmes ouverts")));
+            var open = Games.OpenPrograms();
+            foreach (var p0 in open.Take(20))
             {
-                if (d.ShowDialog(FindForm()) != DialogResult.OK) return;
-                var g = Games.AddManual(d.FileName);
-                app.GamesChanged();
-                app.SetStatus(L.T("« {0} » ajouté en HDR auto.", g.Name), false);
+                var p = p0;
+                string title = p.Title.Length > 48 ? p.Title.Substring(0, 47) + "…" : p.Title;
+                var it = Menus.Item(title + "   (" + Path.GetFileName(p.Path) + ")", (s, e) => AddExe(p.Path));
+                it.ToolTipText = p.Path;
+                menu.Items.Add(it);
             }
+            if (open.Count == 0) menu.Items.Add(new ToolStripMenuItem(L.T("Aucun programme ouvert à proposer")) { Enabled = false });
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(Menus.Item(L.T("Parcourir un fichier .exe…"), (s, e) => BrowseExe()));
+            menu.Show(add, new Point(0, add.Height + Theme.D(2)));
+        }
+
+        void BrowseExe()
+        {
+            using (var d = new OpenFileDialog { Title = L.T("Choisir l'exécutable du jeu"), Filter = L.T("Programmes (*.exe)|*.exe") })
+                if (d.ShowDialog(FindForm()) == DialogResult.OK) AddExe(d.FileName);
+        }
+
+        void AddExe(string exe)
+        {
+            var g = Games.AddManual(exe);
+            app.GamesChanged();
+            if (Games.LooksLikeInstaller(exe))
+                app.SetStatus(L.T("Ce fichier ressemble à un installateur : lance plutôt le jeu, puis ajoute-le depuis « Programmes ouverts »."), true);
+            else app.SetStatus(L.T("« {0} » ajouté en HDR auto.", g.Name), false);
         }
     }
 
