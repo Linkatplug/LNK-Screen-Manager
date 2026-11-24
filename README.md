@@ -7,7 +7,7 @@ Turn your screens on / off and toggle HDR in one click, without digging through 
 
 **Languages / Langues:** English · Français · Deutsch · Español · Italiano · Português (follows Windows automatically, can be changed in Settings).
 
-[English](#english) · [Français](#français)
+[English](#english) · [Français](#français) · 📖 **[Wiki / documentation](https://git.linkatplug.be/linkatplug/LNK-Screen-Manager/wiki)**
 
 ---
 
