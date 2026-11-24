@@ -324,6 +324,10 @@ namespace LnkScreenManager
         {
             var g = e.Graphics; g.Clear(Theme.Bg);
             using (var pen = new Pen(Theme.Border)) g.DrawLine(pen, 0, 0, Width, 0);
+            // barre de progression (recherche des infos HDR)
+            if (app.LookupTotal > 0)
+                using (var b = new SolidBrush(Theme.Accent))
+                    g.FillRectangle(b, 0, 0, (int)(Width * Math.Min(1f, (app.LookupDone + 1) / (float)app.LookupTotal)), Theme.D(3));
             int pad = Theme.D(28);
             string left = string.IsNullOrEmpty(app.Status) ? L.T("Prêt") : app.Status;
             string right = app.Summary + (Settings.AutoHdrGames ? "   ·   " + L.T("HDR auto jeux actif") : "");
@@ -649,7 +653,7 @@ namespace LnkScreenManager
             master.Tg.Toggled += (s, e) => { Settings.AutoHdrGames = master.Tg.Checked; app.ApplyGameSettings(); app.SetStatus(L.T(master.Tg.Checked ? "HDR auto activé pour les jeux." : "HDR auto désactivé."), false); };
             filter.SelectedChanged += (s, e) => Relayout();
             add.Click += (s, e) => AddGame();
-            rescan.Click += (s, e) => { app.RescanGames(); app.SetStatus(L.T(Settings.WikiLookup ? "Jeux actualisés, recherche des infos HDR…" : "Jeux actualisés."), false); };
+            rescan.Click += (s, e) => app.RescanGames(); // le resultat et la progression s'affichent dans la ligne d'etat
             tips.SetToolTip(rescan, L.T("Rechercher de nouveaux jeux"));
             menu.Closed += (s, e) => { if (IsHandleCreated) BeginInvoke((Action)(() => Menus.Clear(menu))); };
         }
@@ -808,7 +812,7 @@ namespace LnkScreenManager
             tgNotif.Toggled += (s, e) => Settings.NotifyChanges = tgNotif.Checked;
             tgMap.Toggled += (s, e) => { Settings.ShowMap = tgMap.Checked; app.SetStatus(L.T(tgMap.Checked ? "Mini-carte affichée." : "Mini-carte masquée."), false); };
             tgAuto.Toggled += (s, e) => { Settings.AutoHdrGames = tgAuto.Checked; app.ApplyGameSettings(); app.SetStatus(L.T(tgAuto.Checked ? "HDR auto activé pour les jeux." : "HDR auto désactivé."), false); };
-            tgWiki.Toggled += (s, e) => { Settings.WikiLookup = tgWiki.Checked; if (tgWiki.Checked) app.LookupGames(); };
+            tgWiki.Toggled += (s, e) => { Settings.WikiLookup = tgWiki.Checked; if (tgWiki.Checked) app.LookupGames(true); };
             pScreen.Click += (s, e) => ShowScreenMenu();
             pAll.Click += (s, e) => app.AllOn();
             pHdr.Click += (s, e) => app.AllHdrOff();

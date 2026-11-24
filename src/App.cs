@@ -23,8 +23,8 @@ using Microsoft.Win32;
 [assembly: AssemblyCompany("LNK Co")]
 [assembly: AssemblyProduct("LNK Screen Manager")]
 [assembly: AssemblyCopyright("© 2026 LNK Co")]
-[assembly: AssemblyVersion("1.4.0.0")]
-[assembly: AssemblyFileVersion("1.4.0.0")]
+[assembly: AssemblyVersion("1.4.1.0")]
+[assembly: AssemblyFileVersion("1.4.1.0")]
 
 namespace LnkScreenManager
 {
@@ -138,7 +138,7 @@ namespace LnkScreenManager
 
             watcher = new GameWatcher(this);
             ApplyGameSettings();
-            if (Settings.AutoHdrGames && Settings.WikiLookup) LookupGames();
+            if (Settings.AutoHdrGames && Settings.WikiLookup) LookupGames(false);
 
             if (hidden) Post(Win.Trim); else ShowMain(Page.Screens); // Post : apres l'initialisation de la boucle de messages
         }
@@ -386,25 +386,44 @@ namespace LnkScreenManager
         public int GameSessions { get { return watcher.ActiveCount; } }
 
         /// Recherche en arriere-plan des infos HDR manquantes (PCGamingWiki).
-        public void LookupGames()
+        /// announce : afficher aussi le resultat quand il n'y avait rien a chercher (action de l'utilisateur).
+        public void LookupGames(bool announce)
         {
-            if (lookingUp || !Settings.WikiLookup) return;
+            if (lookingUp) return;
+            if (!Settings.WikiLookup) { if (announce) SetStatus(L.T("Jeux actualisés."), false); return; }
             lookingUp = true;
             new Thread(() =>
             {
-                int n = 0;
-                try { n = Games.LookupMissing(); } catch { }
+                int n = 0; bool offline = false;
+                try
+                {
+                    if (Games.MissingCount == 0)
+                    {
+                        Post(() => { lookingUp = false; if (announce) SetStatus(L.T("Jeux actualisés.") + "  " + L.T("Infos HDR déjà à jour."), false); });
+                        return;
+                    }
+                    n = Games.LookupMissing((done, total, name) => Post(() =>
+                    {
+                        LookupDone = done; LookupTotal = total;
+                        SetStatus(L.T("Infos HDR : {0} / {1} — {2}", done + 1, total, name), false);
+                        if (done > 0 && done % 5 == 0) GamesChanged(); // les tuiles se mettent a jour au fil de l'eau
+                    }), out offline);
+                }
+                catch { offline = true; }
                 Post(() =>
                 {
-                    lookingUp = false;
+                    lookingUp = false; LookupTotal = 0;
                     if (n > 0) GamesChanged();
+                    SetStatus(offline ? L.T("PCGamingWiki injoignable : nouvel essai plus tard.") : L.T("Infos HDR à jour : {0} jeu(x) consulté(s) sur PCGamingWiki.", n), offline && announce);
                     if (form == null) Win.Trim();
                 });
             }) { IsBackground = true, Priority = ThreadPriority.BelowNormal }.Start();
         }
         public bool LookingUp { get { return lookingUp; } }
+        /// Progression de la recherche en cours (LookupTotal = 0 : aucune recherche).
+        public int LookupDone, LookupTotal;
 
-        public void RescanGames() { Games.Reload(); GamesChanged(); LookupGames(); }
+        public void RescanGames() { Games.Reload(); GamesChanged(); LookupGames(true); }
 
         /// Bascule HDR declenchee par un jeu (independante des autres actions en cours).
         public void HdrAuto(Monitor m, bool on, string msg)

@@ -239,15 +239,22 @@ namespace LnkScreenManager
         }
 
         // ------------------------------------------------ PCGamingWiki
+        /// Nombre de jeux Steam dont l'info HDR n'a pas encore ete cherchee.
+        public static int MissingCount { get { return All.Count(x => x.SteamId != null && x.Wiki == null); } }
+
         /// Cherche l'info HDR des jeux Steam pas encore connus. Renvoie le nombre de jeux mis a jour.
-        public static int LookupMissing()
+        /// progress(fait, total, jeu en cours) est appele avant chaque jeu ; offline = PCGamingWiki injoignable.
+        public static int LookupMissing(Action<int, int, string> progress, out bool offline)
         {
             ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072; // TLS 1.2
+            offline = false;
             int n = 0;
-            foreach (var g in All.Where(x => x.SteamId != null && x.Wiki == null).ToList())
+            var todo = All.Where(x => x.SteamId != null && x.Wiki == null).ToList();
+            foreach (var g in todo)
             {
+                if (progress != null) progress(n, todo.Count, g.Name);
                 string w = WikiHdr(g.SteamId, g.Name);
-                if (w == null) break; // pas de reseau : on reessaiera plus tard
+                if (w == null) { offline = true; break; } // pas de reseau : on reessaiera plus tard
                 g.Wiki = w; n++;
                 Save();
                 Thread.Sleep(200);
