@@ -1,0 +1,7 @@
+# Binaires generes par build.bat
+/build/
+*.exe
+*.pdb
+# Divers
+Thumbs.db
+desktop.ini
