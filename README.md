@@ -9,6 +9,31 @@ Turn your screens on / off and toggle HDR in one click, without digging through 
 
 [English](#english) · [Français](#français) · 📖 **[Wiki / documentation](https://git.linkatplug.be/linkatplug/LNK-Screen-Manager/wiki)**
 
+### Screenshots / Captures d'écran
+
+<p align="center">
+  <img src="docs/screenshots/screens.png" width="720" alt="Screens page: one Screen and one HDR switch per monitor / Page Écrans : un interrupteur Écran et HDR par moniteur"><br>
+  <sub><b>Screens</b>: one <i>Screen</i> and one <i>HDR</i> switch per monitor · <i><b>Écrans</b> : un interrupteur Écran et HDR par moniteur</i></sub>
+</p>
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/games.png" alt="Games page / Page Jeux"><br>
+      <sub><b>Games</b>: auto HDR per game · <i><b>Jeux</b> : HDR auto par jeu</i></sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/settings.png" alt="Settings page / Page Réglages"><br>
+      <sub><b>Settings</b> · <i><b>Réglages</b></i></sub>
+    </td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src="docs/screenshots/tray-menu.png" width="220" alt="Tray menu / Menu près de l'heure"><br>
+  <sub><b>Tray menu</b> (right-click the icon next to the clock) · <i><b>Menu près de l'heure</b> (clic droit sur l'icône)</i></sub>
+</p>
+
 ---
 
 ## English
