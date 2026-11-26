@@ -23,8 +23,8 @@ using Microsoft.Win32;
 [assembly: AssemblyCompany("LNK Co")]
 [assembly: AssemblyProduct("LNK Screen Manager")]
 [assembly: AssemblyCopyright("© 2026 LNK Co")]
-[assembly: AssemblyVersion("1.5.1.0")]
-[assembly: AssemblyFileVersion("1.5.1.0")]
+[assembly: AssemblyVersion("1.5.2.0")]
+[assembly: AssemblyFileVersion("1.5.2.0")]
 
 namespace LnkScreenManager
 {
@@ -114,6 +114,7 @@ namespace LnkScreenManager
         MainForm form;
         DateTime lastRefresh = DateTime.MinValue;
         bool lookingUp;
+        System.Threading.Timer retryLookup;
 
         public List<Monitor> Mons = new List<Monitor>();
         public List<Profile> ProfileList = new List<Profile>();
@@ -416,6 +417,9 @@ namespace LnkScreenManager
                     lookingUp = false; LookupTotal = 0;
                     if (n > 0) GamesChanged();
                     SetStatus(offline ? L.T("PCGamingWiki injoignable : nouvel essai plus tard.") : L.T("Infos HDR à jour : {0} jeu(x) consulté(s) sur PCGamingWiki.", n), offline && announce);
+                    if (retryLookup != null) { retryLookup.Dispose(); retryLookup = null; }
+                    if (offline) // nouvel essai automatique dans 15 min (les infos deja trouvees sont gardees)
+                        retryLookup = new System.Threading.Timer(_ => Post(() => LookupGames(false)), null, 15 * 60 * 1000, Timeout.Infinite);
                     if (form == null) Win.Trim();
                 });
             }) { IsBackground = true, Priority = ThreadPriority.BelowNormal }.Start();

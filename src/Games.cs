@@ -58,7 +58,7 @@ namespace LnkScreenManager
     {
         static readonly object sync = new object();
         static List<Game> list;
-        const string UA = "LNK-Screen-Manager/1.2 (+HDR auto)";
+        static string UA { get { return "LNK-Screen-Manager/" + Brand.Version + " (+HDR auto)"; } }
         public static string LastError;
         static string FilePath { get { return AppData.File("games.txt"); } }
 
@@ -80,6 +80,13 @@ namespace LnkScreenManager
                 Game s;
                 if (saved.TryGetValue(g.Key, out s)) { g.User = s.User; g.Wiki = s.Wiki; g.Manual = s.Manual || g.Manual; }
             }
+            try
+            {
+                HdrLog.Write(string.Format("Jeux détectés : {0} ({1}). Dossiers Xbox : {2}.", res.Count,
+                    string.Join(", ", res.GroupBy(g => g.Source).OrderByDescending(x => x.Count()).Select(x => x.Key + " " + x.Count())),
+                    string.Join(", ", XboxRoots().Where(Directory.Exists).DefaultIfEmpty("aucun"))));
+            }
+            catch { }
             return res.OrderBy(g => g.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
         }
 
@@ -184,8 +191,37 @@ namespace LnkScreenManager
             catch { }
         }
 
-        /// Jeux Xbox / PC Game Pass : dossiers XboxGames de chaque disque (fichier MicrosoftGame.config).
-        public static List<Game> Xbox() { return Xbox(DriveInfo.GetDrives().Where(d => d.DriveType == DriveType.Fixed && d.IsReady).Select(d => Path.Combine(d.RootDirectory.FullName, "XboxGames"))); }
+        /// Jeux Xbox / PC Game Pass (fichier MicrosoftGame.config dans le dossier de chaque jeu).
+        public static List<Game> Xbox() { return Xbox(XboxRoots()); }
+
+        /// Dossiers de jeux Xbox. L'appli Xbox laisse le choix du dossier sur chaque disque et l'enregistre
+        /// dans le fichier cache « .GamingRoot » a la racine du disque : en-tete "RGBX", un entier, puis
+        /// les chemins (relatifs au disque) en UTF-16 termines par un zero. XboxGames est le dossier par defaut.
+        public static List<string> XboxRoots()
+        {
+            var res = new List<string>();
+            foreach (var d in DriveInfo.GetDrives())
+            {
+                try
+                {
+                    if (d.DriveType != DriveType.Fixed || !d.IsReady) continue;
+                    string root = d.RootDirectory.FullName;
+                    res.Add(Path.Combine(root, "XboxGames"));
+                    string f = Path.Combine(root, ".GamingRoot");
+                    if (!File.Exists(f)) continue;
+                    byte[] b = File.ReadAllBytes(f);
+                    if (b.Length < 10 || b.Length > 65536 || b[0] != 'R' || b[1] != 'G' || b[2] != 'B' || b[3] != 'X') continue;
+                    foreach (var part in Encoding.Unicode.GetString(b, 8, (b.Length - 8) & ~1).Split('\0'))
+                    {
+                        string rel = part.Trim();
+                        if (rel.Length == 0 || rel.IndexOfAny(Path.GetInvalidPathChars()) >= 0) continue;
+                        res.Add(Path.Combine(root, rel.TrimStart('\\', '/')));
+                    }
+                }
+                catch { }
+            }
+            return res.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        }
 
         public static List<Game> Xbox(IEnumerable<string> roots)
         {
@@ -509,8 +545,11 @@ namespace LnkScreenManager
                 if (w == null) { offline = true; break; } // pas de reseau : on reessaiera plus tard
                 g.Wiki = w; n++;
                 Save();
-                Thread.Sleep(200);
             }
+            if (todo.Count > 0)
+                HdrLog.Write(offline
+                    ? string.Format("Infos HDR : {0} / {1} jeux consultés, puis arrêt ({2}). Nouvel essai plus tard.", n, todo.Count, LastError)
+                    : string.Format("Infos HDR : {0} jeux consultés sur PCGamingWiki.", n));
             return n;
         }
 
@@ -520,10 +559,8 @@ namespace LnkScreenManager
             try
             {
                 // 1) redirection officielle identifiant Steam -> page du jeu
-                var req = (HttpWebRequest)WebRequest.Create("https://www.pcgamingwiki.com/api/appid.php?appid=" + appId);
-                req.UserAgent = UA; req.AllowAutoRedirect = false; req.Timeout = 10000;
                 string page = null;
-                using (var r = (HttpWebResponse)req.GetResponse())
+                using (var r = Send("https://www.pcgamingwiki.com/api/appid.php?appid=" + appId, false))
                 {
                     string loc = r.Headers["Location"];
                     int i = loc == null ? -1 : loc.IndexOf("/wiki/", StringComparison.Ordinal);
@@ -536,9 +573,14 @@ namespace LnkScreenManager
                 string clean = Regex.Replace(name ?? "", "[™®©]", "").Trim();
                 if (clean.Length == 0) return "unknown";
                 string json = Get("https://www.pcgamingwiki.com/w/api.php?action=query&list=search&srwhat=title&srlimit=5&format=json&srsearch=" + Uri.EscapeDataString(clean));
-                foreach (Match m in Regex.Matches(json, "\"title\":\"((?:[^\"\\\\]|\\\\.)*)\""))
+                var titles = Regex.Matches(json, "\"title\":\"((?:[^\"\\\\]|\\\\.)*)\"").Cast<Match>().Select(m => Regex.Unescape(m.Groups[1].Value)).ToList();
+                // pour menager PCGamingWiki : seulement le titre identique, sinon le premier resultat
+                string key = TitleKey(clean);
+                var check = titles.Where(t => TitleKey(t) == key).ToList();
+                if (check.Count == 0) check = titles.Take(1).ToList();
+                foreach (var t in check)
                 {
-                    string w = PageHdr(Regex.Unescape(m.Groups[1].Value), appId);
+                    string w = PageHdr(t, appId);
                     if (w != null) return w;
                 }
                 return "unknown";
@@ -549,7 +591,7 @@ namespace LnkScreenManager
                 var resp = ex.Response as HttpWebResponse;
                 return resp != null && (int)resp.StatusCode == 404 ? "unknown" : null;
             }
-            catch (Exception ex) { LastError = ex.ToString(); return null; }
+            catch (Exception ex) { LastError = ex.Message; return null; }
         }
 
         /// Jeux hors Steam : recherche par nom, en ne gardant qu'un titre IDENTIQUE (sinon « inconnu »,
@@ -577,7 +619,7 @@ namespace LnkScreenManager
                 var resp = ex.Response as HttpWebResponse;
                 return resp != null && (int)resp.StatusCode == 404 ? "unknown" : null;
             }
-            catch (Exception ex) { LastError = ex.ToString(); return null; }
+            catch (Exception ex) { LastError = ex.Message; return null; }
         }
 
         /// Titre normalise pour comparaison : minuscules, sans symboles ni ponctuation.
@@ -604,10 +646,37 @@ namespace LnkScreenManager
 
         static string Get(string url)
         {
-            var req = (HttpWebRequest)WebRequest.Create(url);
-            req.UserAgent = UA; req.Timeout = 10000;
-            using (var r = req.GetResponse())
+            using (var r = Send(url, true))
             using (var sr = new StreamReader(r.GetResponseStream(), Encoding.UTF8)) return sr.ReadToEnd();
+        }
+
+        /// PCGamingWiki limite le debit (erreur 429 « Too Many Requests ») : au plus une requete par seconde,
+        /// et en cas de 429 on attend le delai demande (Retry-After, sinon 15 puis 30 s) avant de reessayer.
+        const int RequestGapMs = 1000;
+        static DateTime nextRequest = DateTime.MinValue;
+
+        static HttpWebResponse Send(string url, bool redirect)
+        {
+            for (int attempt = 0; ; attempt++)
+            {
+                int wait = (int)(nextRequest - DateTime.UtcNow).TotalMilliseconds;
+                if (wait > 0) Thread.Sleep(wait);
+                nextRequest = DateTime.UtcNow.AddMilliseconds(RequestGapMs);
+                var req = (HttpWebRequest)WebRequest.Create(url);
+                req.UserAgent = UA; req.AllowAutoRedirect = redirect; req.Timeout = 15000;
+                try { return (HttpWebResponse)req.GetResponse(); }
+                catch (WebException ex)
+                {
+                    var r = ex.Response as HttpWebResponse;
+                    if (r == null || (int)r.StatusCode != 429 || attempt >= 2) throw;
+                    int s;
+                    if (!int.TryParse(r.Headers["Retry-After"], out s)) s = 15 << attempt;
+                    r.Close();
+                    s = Math.Max(5, Math.Min(s, 60));
+                    HdrLog.Write(string.Format("PCGamingWiki : trop de requêtes (429), pause de {0} s.", s));
+                    Thread.Sleep(s * 1000);
+                }
+            }
         }
     }
 
