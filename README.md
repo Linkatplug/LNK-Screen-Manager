@@ -52,7 +52,20 @@ Nothing to install: copy `LNK Screen Manager.exe` anywhere and run it. Windows 1
 **SmartScreen warning**: the exe is not code-signed (no paid certificate). On first launch Windows may show “Windows protected your PC”: click **More info**, then **Run anyway**. To check the file, compare its SHA-256 hash with the one published in the release (`Get-FileHash "LNK Screen Manager.exe"`), or build it yourself (see below).
 
 ### Data & privacy
-- Profiles, screen names, layout and settings: `%APPDATA%\LNK Screen Manager` (nothing else is written, except the Windows startup entry if that option is on).
+- **Where the data goes**: by default in `%APPDATA%\LNK Screen Manager` (i.e. `C:\Users\<you>\AppData\Roaming\LNK Screen Manager`). Everything stays on your PC:
+
+  | File | Content |
+  |---|---|
+  | `settings.ini` | App settings |
+  | `profiles.txt` | Your profiles |
+  | `names.txt` | Custom screen names |
+  | `layout.txt` | Remembered position, resolution and refresh rate of each screen |
+  | `games.txt` | Per-game choices and cached HDR info |
+  | `hdr-auto.log` | Auto HDR log (games detected, HDR on / off, HDR info lookup) |
+  | `hdr-sessions.txt` | Games in progress (temporary, so HDR is turned back off even after a restart) |
+
+- **Change the location**: *Settings → Actions → Data folder → Manage → Change location…*. The files are moved to the chosen folder (a `LNK Screen Manager` subfolder is created there) and the old copy is removed. *Back to the default location* moves them back.
+- **Registry**: the app only writes `HKCU\Software\LNK Screen Manager` → `DataFolder` (only if you changed the location) and the Windows startup entry `HKCU\...\Run` (only if *Start with Windows* is on). Nothing else is written anywhere.
 - The only network access is the optional *Online HDR info* lookup: it sends each game's **public Steam ID** (or, for other stores, its **title**) to PCGamingWiki, once per game. Can be turned off in Settings.
 - Anti-cheat safe: the app never touches games, it only changes the Windows display setting.
 
@@ -87,7 +100,20 @@ Rien à installer : copier `LNK Screen Manager.exe` où on veut et le lancer. Wi
 **Avertissement SmartScreen** : l'exe n'est pas signé (pas de certificat payant). Au premier lancement, Windows peut afficher « Windows a protégé votre ordinateur » : cliquer sur **Informations complémentaires** puis **Exécuter quand même**. Pour vérifier l'exe, comparez son empreinte SHA-256 avec celle publiée dans la release (`Get-FileHash "LNK Screen Manager.exe"`), ou compilez-le vous-même (voir plus bas).
 
 ### Données et vie privée
-- Profils, noms d'écrans, disposition et réglages : `%APPDATA%\LNK Screen Manager` (rien d'autre n'est écrit, sauf la clé de démarrage Windows si l'option est activée).
+- **Où vont les données** : par défaut dans `%APPDATA%\LNK Screen Manager` (soit `C:\Users\<toi>\AppData\Roaming\LNK Screen Manager`). Tout reste sur ton PC :
+
+  | Fichier | Contenu |
+  |---|---|
+  | `settings.ini` | Réglages de l'appli |
+  | `profiles.txt` | Tes profils |
+  | `names.txt` | Noms personnalisés des écrans |
+  | `layout.txt` | Position, résolution et fréquence mémorisées de chaque écran |
+  | `games.txt` | Choix par jeu et infos HDR en cache |
+  | `hdr-auto.log` | Journal du HDR auto (jeux détectés, HDR activé / coupé, recherche des infos HDR) |
+  | `hdr-sessions.txt` | Jeux en cours (temporaire, pour couper le HDR même après un redémarrage) |
+
+- **Changer l'emplacement** : *Réglages → Actions → Dossier des données → Gérer → Changer d'emplacement…*. Les fichiers sont déplacés dans le dossier choisi (un sous-dossier `LNK Screen Manager` y est créé) et l'ancienne copie est supprimée. *Revenir à l'emplacement par défaut* les remet à leur place d'origine.
+- **Registre** : l'appli écrit seulement `HKCU\Software\LNK Screen Manager` → `DataFolder` (uniquement si tu as changé l'emplacement) et la clé de démarrage Windows `HKCU\...\Run` (uniquement si *Lancer avec Windows* est activé). Rien d'autre n'est écrit nulle part.
 - Seule connexion réseau : l'option *Infos HDR en ligne* interroge PCGamingWiki avec l'**identifiant Steam public** de chaque jeu (ou son **titre** pour les autres boutiques), une seule fois par jeu. Désactivable dans Réglages.
 - Aucun anti-triche concerné : l'appli ne touche jamais aux jeux, elle change uniquement le réglage d'écran de Windows.
 

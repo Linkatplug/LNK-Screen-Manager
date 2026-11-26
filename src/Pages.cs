@@ -792,13 +792,14 @@ namespace LnkScreenManager
         readonly List<Tuple<SectionHeader, List<OptionRow>>> left = new List<Tuple<SectionHeader, List<OptionRow>>>(), right = new List<Tuple<SectionHeader, List<OptionRow>>>();
         readonly Segmented segTheme = new Segmented(L.T("Système"), L.T("Sombre"), L.T("Clair"));
         readonly Toggle tgTray = new Toggle(), tgBoot = new Toggle(), tgNotif = new Toggle(), tgMap = new Toggle(), tgAuto = new Toggle(), tgWiki = new Toggle();
-        readonly Pill pScreen = new Pill(L.T("Écran du jeu")), pLang = new Pill(L.T("Automatique"));
+        readonly Pill pScreen = new Pill(L.T("Écran du jeu")), pLang = new Pill(L.T("Automatique")), pData = new Pill(L.T("Gérer"));
+        OptionRow rowData;
         readonly ContextMenuStrip menu = Menus.Create();
 
         public SettingsPage(TrayApp app) : base(app)
         {
             Controls.Add(title);
-            var pAll = new Pill(L.T("Allumer")); var pHdr = new Pill(L.T("Couper")); var pData = new Pill(L.T("Ouvrir"));
+            var pAll = new Pill(L.T("Allumer")); var pHdr = new Pill(L.T("Couper"));
             var pWiki = new Pill(L.T("Ouvrir")); var pQuit = new Pill(L.T("Quitter"));
 
             Group(left, L.T("Apparence"),
@@ -819,7 +820,7 @@ namespace LnkScreenManager
             Group(right, L.T("Actions"),
                 Row(L.T("Allumer tous les écrans"), null, pAll),
                 Row(L.T("Couper le HDR partout"), null, pHdr),
-                Row(L.T("Dossier des données"), L.T("Profils, noms, réglages"), pData));
+                rowData = Row(L.T("Dossier des données"), AppData.Display, pData));
 
             segTheme.SelectedChanged += (s, e) =>
             {
@@ -840,7 +841,7 @@ namespace LnkScreenManager
             pScreen.Click += (s, e) => ShowScreenMenu();
             pAll.Click += (s, e) => app.AllOn();
             pHdr.Click += (s, e) => app.AllHdrOff();
-            pData.Click += (s, e) => { try { Process.Start("explorer.exe", "\"" + AppData.Dir + "\""); } catch { } };
+            pData.Click += (s, e) => ShowDataMenu();
             pWiki.Click += (s, e) => { try { Process.Start(WikiUrl); } catch { } };
             pQuit.Click += (s, e) => app.Exit();
             menu.Closed += (s, e) => { if (IsHandleCreated) BeginInvoke((Action)(() => Menus.Clear(menu))); };
@@ -929,6 +930,34 @@ namespace LnkScreenManager
                 menu.Items.Add(i);
             }
             menu.Show(pScreen, new Point(0, pScreen.Height + Theme.D(2)));
+        }
+
+        // ---- dossier des donnees : ouvrir, deplacer, revenir a l'emplacement par defaut
+        void ShowDataMenu()
+        {
+            Menus.Clear(menu);
+            menu.Items.Add(Menus.Header(AppData.Display));
+            menu.Items.Add(Menus.Item(L.T("Ouvrir le dossier"), (s, e) => { try { Process.Start("explorer.exe", "\"" + AppData.Dir + "\""); } catch { } }));
+            menu.Items.Add(Menus.Item(L.T("Changer d'emplacement…"), (s, e) => ChooseDataFolder()));
+            if (AppData.Custom != null) menu.Items.Add(Menus.Item(L.T("Revenir à l'emplacement par défaut"), (s, e) => MoveData(null)));
+            menu.Show(pData, new Point(0, pData.Height + Theme.D(2)));
+        }
+
+        void ChooseDataFolder()
+        {
+            using (var d = new FolderBrowserDialog { Description = L.T("Choisis où enregistrer les profils, noms d'écrans, jeux et réglages. Un dossier « {0} » y sera créé.", AppData.FolderName), ShowNewFolderButton = true, SelectedPath = AppData.Dir })
+                if (d.ShowDialog(FindForm()) == DialogResult.OK) MoveData(AppData.TargetFor(d.SelectedPath));
+        }
+
+        void MoveData(string target)
+        {
+            string to = target ?? AppData.DefaultDir;
+            if (AppData.Same(to, AppData.Dir)) { app.SetStatus(L.T("Les données sont déjà dans ce dossier."), false); return; }
+            if (!Dialogs.Confirm(FindForm(), L.T("Dossier des données"), L.T("Déplacer les données vers :\n{0}\n\nElles seront copiées puis supprimées de l'ancien dossier.", to), L.T("Déplacer"))) return;
+            string err = AppData.MoveTo(target);
+            if (err != null) { app.SetStatus(L.T("Impossible : {0}", err), true); return; }
+            rowData.Sub = AppData.Display; rowData.Invalidate();
+            app.SetStatus(L.T("Données déplacées vers {0}.", AppData.Dir), false);
         }
 
         void ShowLanguageMenu()

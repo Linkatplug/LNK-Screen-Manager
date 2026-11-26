@@ -359,17 +359,107 @@ namespace LnkScreenManager
         }
     }
 
-    // ------------------------------------------------------------------ Dossier de donnees (%APPDATA%\LNK Screen Manager)
+    // ------------------------------------------------------------------ Dossier de donnees (%APPDATA%\LNK Screen Manager par defaut)
     public static class AppData
     {
+        public const string FolderName = "LNK Screen Manager";
+        /// L'emplacement choisi est note dans le registre (HKCU\Software\LNK Screen Manager, valeur DataFolder) :
+        /// c'est le seul endroit qui ne depend pas du dossier de donnees lui-meme. Absent = emplacement par defaut.
+        const string RegKey = @"Software\LNK Screen Manager", RegValue = "DataFolder";
+        /// Fichiers de l'appli (deplaces ensemble quand l'emplacement change).
+        public static readonly string[] Files = { "settings.ini", "profiles.txt", "names.txt", "layout.txt", "games.txt", "hdr-sessions.txt", "hdr-auto.log" };
+
+        public static string DefaultDir { get { return System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), FolderName); } }
+
+        static string custom; static bool customRead;
+        /// Dossier choisi par l'utilisateur, ou null pour l'emplacement par defaut.
+        public static string Custom
+        {
+            get
+            {
+                if (!customRead)
+                {
+                    customRead = true;
+                    try { using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(RegKey)) custom = k == null ? null : k.GetValue(RegValue) as string; } catch { }
+                    if (string.IsNullOrWhiteSpace(custom)) custom = null;
+                }
+                return custom;
+            }
+        }
+
         public static string Dir
         {
             get
             {
-                string d = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "LNK Screen Manager");
-                Directory.CreateDirectory(d);
+                string d = Custom ?? DefaultDir;
+                try { Directory.CreateDirectory(d); }
+                catch { d = DefaultDir; Directory.CreateDirectory(d); } // disque absent : on retombe sur le dossier par defaut
                 return d;
             }
+        }
+
+        /// Chemin affiche : %APPDATA%\... pour l'emplacement par defaut (plus court, sans le nom du compte).
+        public static string Display { get { return Custom == null ? @"%APPDATA%\" + FolderName : Custom; } }
+
+        /// Dossier reellement utilise si l'utilisateur choisit "folder" : on y cree un sous-dossier
+        /// « LNK Screen Manager », sauf s'il porte deja ce nom.
+        public static string TargetFor(string folder)
+        {
+            folder = System.IO.Path.GetFullPath(folder).TrimEnd('\\');
+            if (folder.Length <= 2 || !string.Equals(System.IO.Path.GetFileName(folder), FolderName, StringComparison.OrdinalIgnoreCase))
+                folder = System.IO.Path.Combine(folder.Length <= 2 ? folder + "\\" : folder, FolderName);
+            return folder;
+        }
+
+        public static bool Same(string a, string b)
+        {
+            try { return string.Equals(System.IO.Path.GetFullPath(a).TrimEnd('\\'), System.IO.Path.GetFullPath(b).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase); }
+            catch { return false; }
+        }
+
+        /// Deplace les donnees vers "target" (null = emplacement par defaut) : copie, verifie, note le nouvel
+        /// emplacement, puis supprime les anciens fichiers. Renvoie null si tout va bien, sinon le message d'erreur.
+        public static string MoveTo(string target)
+        {
+            if (string.IsNullOrWhiteSpace(target)) target = null;
+            string from = Dir, to = target ?? DefaultDir;
+            if (Same(from, to)) return SetCustom(target);
+            try
+            {
+                Directory.CreateDirectory(to);
+                string probe = System.IO.Path.Combine(to, ".write-test");
+                System.IO.File.WriteAllText(probe, "ok"); System.IO.File.Delete(probe);
+                foreach (var f in Files)
+                {
+                    string src = System.IO.Path.Combine(from, f), dst = System.IO.Path.Combine(to, f);
+                    if (System.IO.File.Exists(src)) System.IO.File.Copy(src, dst, true);
+                    else if (System.IO.File.Exists(dst)) System.IO.File.Delete(dst); // pas d'anciennes donnees melangees aux actuelles
+                }
+                foreach (var f in Files)
+                {
+                    var a = new FileInfo(System.IO.Path.Combine(from, f));
+                    if (a.Exists && new FileInfo(System.IO.Path.Combine(to, f)).Length != a.Length) return L.T("copie incomplète de {0}", f);
+                }
+            }
+            catch (Exception ex) { return ex.Message; }
+            string err = SetCustom(target);
+            if (err != null) return err; // emplacement non enregistre : on garde les anciens fichiers
+            foreach (var f in Files) { try { System.IO.File.Delete(System.IO.Path.Combine(from, f)); } catch { } }
+            try { if (!Directory.EnumerateFileSystemEntries(from).Any()) Directory.Delete(from); } catch { }
+            return null;
+        }
+
+        static string SetCustom(string target)
+        {
+            if (target != null && Same(target, DefaultDir)) target = null;
+            try
+            {
+                if (target == null) { using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(RegKey, true)) if (k != null) k.DeleteValue(RegValue, false); }
+                else using (var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(RegKey)) k.SetValue(RegValue, target);
+            }
+            catch (Exception ex) { return ex.Message; }
+            custom = target; customRead = true;
+            return null;
         }
 
         /// Chemin d'un fichier de donnees ; reprend automatiquement un ancien fichier pose a cote de l'exe.
