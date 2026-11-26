@@ -23,8 +23,8 @@ using Microsoft.Win32;
 [assembly: AssemblyCompany("LNK Co")]
 [assembly: AssemblyProduct("LNK Screen Manager")]
 [assembly: AssemblyCopyright("© 2026 LNK Co")]
-[assembly: AssemblyVersion("1.5.2.0")]
-[assembly: AssemblyFileVersion("1.5.2.0")]
+[assembly: AssemblyVersion("1.5.3.0")]
+[assembly: AssemblyFileVersion("1.5.3.0")]
 
 namespace LnkScreenManager
 {

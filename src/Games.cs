@@ -558,13 +558,28 @@ namespace LnkScreenManager
             if (appId == null) return WikiByExactName(name);
             try
             {
-                // 1) redirection officielle identifiant Steam -> page du jeu
+                // 1) redirection officielle identifiant Steam -> page du jeu.
+                //    Cette adresse est protegee par Cloudflare, qui refuse parfois les applis (403 « challenge ») :
+                //    dans ce cas on passe a la recherche par nom (API du wiki, non bloquee) pour le reste de la session.
                 string page = null;
-                using (var r = Send("https://www.pcgamingwiki.com/api/appid.php?appid=" + appId, false))
+                if (!appIdBlocked)
                 {
-                    string loc = r.Headers["Location"];
-                    int i = loc == null ? -1 : loc.IndexOf("/wiki/", StringComparison.Ordinal);
-                    if (i >= 0) page = Uri.UnescapeDataString(loc.Substring(i + 6)).Replace('_', ' ');
+                    try
+                    {
+                        using (var r = Send("https://www.pcgamingwiki.com/api/appid.php?appid=" + appId, false))
+                        {
+                            string loc = r.Headers["Location"];
+                            int i = loc == null ? -1 : loc.IndexOf("/wiki/", StringComparison.Ordinal);
+                            if (i >= 0) page = Uri.UnescapeDataString(loc.Substring(i + 6)).Replace('_', ' ');
+                        }
+                    }
+                    catch (WebException ex)
+                    {
+                        var resp = ex.Response as HttpWebResponse;
+                        if (resp == null || (int)resp.StatusCode != 403) throw;
+                        appIdBlocked = true;
+                        HdrLog.Write("PCGamingWiki : recherche par identifiant Steam refusée (403), passage à la recherche par nom.");
+                    }
                 }
                 if (page != null) { string w = PageHdr(page, null); if (w != null) return w; }
 
@@ -574,10 +589,11 @@ namespace LnkScreenManager
                 if (clean.Length == 0) return "unknown";
                 string json = Get("https://www.pcgamingwiki.com/w/api.php?action=query&list=search&srwhat=title&srlimit=5&format=json&srsearch=" + Uri.EscapeDataString(clean));
                 var titles = Regex.Matches(json, "\"title\":\"((?:[^\"\\\\]|\\\\.)*)\"").Cast<Match>().Select(m => Regex.Unescape(m.Groups[1].Value)).ToList();
-                // pour menager PCGamingWiki : seulement le titre identique, sinon le premier resultat
+                // pour menager PCGamingWiki : seulement le titre identique, sinon les premiers resultats
+                // (l'identifiant Steam de la page est verifie dans tous les cas)
                 string key = TitleKey(clean);
                 var check = titles.Where(t => TitleKey(t) == key).ToList();
-                if (check.Count == 0) check = titles.Take(1).ToList();
+                if (check.Count == 0) check = titles.Take(appIdBlocked ? 2 : 1).ToList();
                 foreach (var t in check)
                 {
                     string w = PageHdr(t, appId);
@@ -654,6 +670,7 @@ namespace LnkScreenManager
         /// et en cas de 429 on attend le delai demande (Retry-After, sinon 15 puis 30 s) avant de reessayer.
         const int RequestGapMs = 1000;
         static DateTime nextRequest = DateTime.MinValue;
+        static bool appIdBlocked;
 
         static HttpWebResponse Send(string url, bool redirect)
         {
